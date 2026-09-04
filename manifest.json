@@ -1,0 +1,11 @@
+{
+  "id": "lyric-layer",
+  "name": "LyricLayer 自定义翻译",
+  "description": "为 Spicy Lyrics 显示用户自己上传并保存在本地的中文翻译歌词。",
+  "authors": [{ "name": "LyricLayer" }],
+  "version": "0.1.0",
+  "main": "dist/lyric-layer.js",
+  "license": "MIT",
+  "spicetify": { "minVersion": "2.30.0" },
+  "tags": ["lyrics", "translation", "spicy-lyrics", "local"]
+}
