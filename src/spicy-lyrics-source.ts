@@ -1,6 +1,7 @@
 import type { LyricLine } from "./types";
 
 const CACHE_NAMES = ["SpicyLyrics_LyricsStore_g1", "SpicyLyrics_LyricsStore"];
+const ZERO_WIDTH_CHARACTERS = /[\u200B-\u200D\u2060\uFEFF]/g;
 
 interface RawSyllable {
   Text?: string;
@@ -62,7 +63,7 @@ function syllablesToText(syllables: RawSyllable[]): string {
   syllables.forEach((syllable, index) => {
     const previous = syllables[index - 1];
     if (previous && !previous.IsPartOfWord) text += " ";
-    text += syllable.Text ?? "";
+    text += (syllable.Text ?? "").replace(ZERO_WIDTH_CHARACTERS, "");
   });
   return text.trim();
 }
@@ -78,7 +79,7 @@ export function extractLyricLines(raw: RawLyrics): LyricLine[] {
     const syllables = item.Lead?.Syllables;
     const text = syllables?.length
       ? syllablesToText(syllables)
-      : String(item.Text ?? item.Lead?.Text ?? "").trim();
+      : String(item.Text ?? item.Lead?.Text ?? "").replace(ZERO_WIDTH_CHARACTERS, "").trim();
     if (!text) continue;
     output.push({
       index: output.length,

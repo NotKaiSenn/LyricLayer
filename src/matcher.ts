@@ -3,7 +3,13 @@ import type { LyricLine, TranslationLine } from "./types";
 export const DEFAULT_TIME_TOLERANCE_MS = 1_000;
 
 export function normalizeLyricText(text: string): string {
-  return text.normalize("NFKC").toLocaleLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
+  return text
+    .normalize("NFKC")
+    .toLocaleLowerCase()
+    // Spicy Lyrics strips these before rendering, while its cached source may
+    // still contain them as word separators. They are not all matched by \s.
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, "")
+    .replace(/[\s\p{P}\p{S}]+/gu, "");
 }
 
 export function matchTranslations(

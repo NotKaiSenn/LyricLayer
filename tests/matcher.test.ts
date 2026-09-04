@@ -36,3 +36,11 @@ test("同一翻译不会匹配多个重复歌词行", () => {
   const result = matchTranslations(lyrics, [{ originalText: "Repeated", translatedText: "重复" }]);
   assert.equal(result.size, 1);
 });
+
+test("缓存原文中的零宽分隔符不影响 DOM 文本匹配", () => {
+  const result = matchTranslations(
+    [{ index: 0, text: "It's like you don't know" }],
+    [{ originalText: "It's\u200Blike\u200Byou\u200Bdon't\u200Bknow", translatedText: "你似乎并不知道" }],
+  );
+  assert.equal(result.get(0)?.translatedText, "你似乎并不知道");
+});

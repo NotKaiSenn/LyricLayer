@@ -31,3 +31,11 @@ test("静态歌词保留全部行供编辑器使用", () => {
     { index: 1, text: "Two" },
   ]);
 });
+
+test("读取缓存时清理 Spicy Lyrics 渲染前会移除的零宽字符", () => {
+  assert.deepEqual(extractLyricLines({ Type: "Line", Content: [
+    { Type: "Vocal", Text: "Come\u200B and\u2060 go", StartTime: 1, EndTime: 2 },
+  ] }), [
+    { index: 0, text: "Come and go", startTime: 1_000, endTime: 2_000 },
+  ]);
+});
