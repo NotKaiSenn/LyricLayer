@@ -35,6 +35,7 @@ class LyricLayerApp {
     store: this.store,
     getTrack: currentTrack,
     getLyrics: () => this.ensureLyrics(true),
+    getExportLyrics: readSpicyLyricsLines,
     onEntryChanged: (trackUri) => this.reloadEntry(trackUri),
   });
   private entry?: TranslationEntry;

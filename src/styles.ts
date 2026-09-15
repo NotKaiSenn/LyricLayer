@@ -307,6 +307,12 @@ sl-generic-modal.SpicyLyricsModal .sl-modal.slmodal-lyricLayer:has(.lyric-layer-
   backdrop-filter: blur(18px) saturate(1.4);
 }
 .lyric-layer-hint { color: var(--color-text-tertiary, rgba(255,255,255,.35)); font-size: var(--text-footnote-size, 12px); }
+.lyric-layer-export-description {
+  margin: 0 var(--space-3, 12px) var(--space-4, 16px);
+  color: var(--color-text-secondary, rgba(255,255,255,.6));
+  font-size: var(--text-caption-size, 13px);
+  line-height: 1.5;
+}
 
 @media (max-width: 720px) {
   .lyric-layer-panel, .lyric-layer-editor { min-width: 0; }

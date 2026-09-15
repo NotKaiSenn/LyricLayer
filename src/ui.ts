@@ -1,4 +1,5 @@
 import { matchTranslations } from "./matcher";
+import { exportLyrics, type LyricExportMode } from "./lyric-export";
 import { parseJson, parseLrc, parseTxt } from "./parsers";
 import type { TranslationStore } from "./storage";
 import type { LyricLine, TrackInfo, TranslationEntry, TranslationLine } from "./types";
@@ -7,6 +8,7 @@ interface UiDependencies {
   store: TranslationStore;
   getTrack: () => TrackInfo | undefined;
   getLyrics: () => Promise<LyricLine[]>;
+  getExportLyrics: (trackUri: string) => Promise<LyricLine[]>;
   onEntryChanged: (trackUri: string) => Promise<void>;
 }
 
@@ -123,15 +125,29 @@ async function chooseFile(accept: string): Promise<File | undefined> {
 }
 
 function downloadJson(entry: TranslationEntry): void {
-  const blob = new Blob([`${JSON.stringify(entry, null, 2)}\n`], { type: "application/json;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
   const uriParts = entry.trackUri.split(":");
   const trackId = uriParts[uriParts.length - 1] ?? "track";
+  downloadFile(`${JSON.stringify(entry, null, 2)}\n`, `lyric-layer-${trackId}.json`, "application/json");
+}
+
+function downloadFile(text: string, filename: string, mimeType = "text/plain"): void {
+  const blob = new Blob([text], { type: `${mimeType};charset=utf-8` });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = `lyric-layer-${trackId}.json`;
+  anchor.download = filename;
   anchor.click();
   setTimeout(() => URL.revokeObjectURL(url), 1_000);
+}
+
+function lyricFilename(track: TrackInfo, mode: LyricExportMode, extension: string): string {
+  const name = Array.from(`${track.artist} - ${track.title}`
+    .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "_")
+    .trim())
+    .slice(0, 60)
+    .join("")
+    .replace(/[. ]+$/, "");
+  return `${name || "lyrics"} - ${mode.startsWith("translation") ? "翻译" : "原文"}.${extension}`;
 }
 
 export class TranslationUi {
@@ -202,6 +218,7 @@ export class TranslationUi {
     const lrcButton = button("选择文件", "secondary", ICONS.upload);
     const jsonButton = button("选择文件", "secondary", ICONS.upload);
     const editButton = button(entry ? "继续编辑" : "开始编辑", "primary", ICONS.edit);
+    const lyricsExportButton = button("选择格式", "secondary", ICONS.download);
     const exportButton = button("导出", "secondary", ICONS.download);
     const deleteButton = button("删除", "danger", ICONS.trash);
 
@@ -222,6 +239,7 @@ export class TranslationUi {
       settingRow("LyricLayer JSON", "导入之前导出的完整翻译备份。", jsonButton),
       sectionTitle("编辑与管理"),
       settingRow("逐行编辑", "对照当前原歌词填写或批量粘贴中文翻译。", editButton),
+      settingRow("导出歌词", "导出原文或翻译，用于制作翻译和歌词投稿。", lyricsExportButton),
       settingRow("导出备份", "将当前歌曲翻译导出为可再次导入的 JSON。", exportButton),
       settingRow("删除本地翻译", "只删除当前歌曲保存在此设备上的翻译。", deleteButton, "danger"),
     );
@@ -264,6 +282,16 @@ export class TranslationUi {
     lrcButton.addEventListener("click", () => void importFile("lrc"));
     jsonButton.addEventListener("click", () => void importFile("json"));
     editButton.addEventListener("click", () => void this.openEditor(track));
+    lyricsExportButton.addEventListener("click", async () => {
+      lyricsExportButton.disabled = true;
+      try {
+        await this.openLyricsExport(track);
+      } catch (error) {
+        notify(error instanceof Error ? error.message : "读取歌词失败", true);
+      } finally {
+        lyricsExportButton.disabled = false;
+      }
+    });
     exportButton.disabled = !entry;
     exportButton.addEventListener("click", () => { if (entry) downloadJson(entry); });
     deleteButton.disabled = !entry;
@@ -276,6 +304,69 @@ export class TranslationUi {
     });
 
     this.displayModal("自定义翻译", root, transition);
+  }
+
+  private async openLyricsExport(track: TrackInfo): Promise<void> {
+    const [lyrics, entry] = await Promise.all([
+      this.dependencies.getExportLyrics(track.uri),
+      this.dependencies.store.get(track.uri),
+    ]);
+    const savedLines = entry?.lines ?? [];
+    const originalLines = lyrics.length
+      ? lyrics.map((line) => ({ originalText: line.text, startTime: line.startTime, translatedText: "" }))
+      : savedLines;
+    const matches = matchTranslations(lyrics, savedLines);
+    // Keep every saved translation, even if the current provider has different
+    // lines or only static lyrics. Missing source timing must not erase saved timing.
+    const translationLines = savedLines.map((line) => ({
+      ...line,
+      startTime: lyrics.find((lyric) => matches.get(lyric.index) === line)?.startTime ?? line.startTime,
+    }));
+    const root = document.createElement("div");
+    root.className = "lyric-layer-panel";
+    const toolbar = document.createElement("div");
+    toolbar.className = "lyric-layer-editor-toolbar";
+    const back = button("返回", "quiet", ICONS.back);
+    back.addEventListener("click", () => void this.open(true));
+    toolbar.appendChild(back);
+    const description = document.createElement("p");
+    description.className = "lyric-layer-export-description";
+    description.textContent = lyrics.length
+      ? "导出 Spicy Lyrics 的主歌词；翻译使用已保存的内容。"
+      : entry?.lines.length
+        ? "当前原歌词暂不可用，使用已保存的歌词内容导出。"
+        : "还没有取得原歌词，请先打开 Spicy Lyrics 歌词页，等待加载完成后重试。";
+    root.append(toolbar, description);
+
+    const formats: Array<{ mode: LyricExportMode; label: string; description: string }> = [
+      { mode: "original", label: "仅原文", description: "纯文本，每行一句，方便对照原文制作翻译。" },
+      { mode: "original-timed", label: "原文带时间戳", description: "保留原歌词时间轴，格式为 [00:30.660]原文。" },
+      { mode: "translation", label: "仅翻译", description: "纯文本，只包含已填写的译文，跳过未翻译行。" },
+      { mode: "translation-timed", label: "翻译带时间戳", description: "译文沿用对应原歌词的时间戳，跳过未翻译行。" },
+    ];
+    for (const format of formats) {
+      if (format.mode === "original") root.appendChild(sectionTitle("原文"));
+      if (format.mode === "translation") root.appendChild(sectionTitle("翻译"));
+      const exportButton = button(format.mode.endsWith("-timed") ? "导出 LRC" : "导出 TXT", "secondary", ICONS.download);
+      exportButton.setAttribute("aria-label", `导出${format.label}`);
+      let detail = format.description;
+      try {
+        const result = exportLyrics(format.mode.startsWith("translation") ? translationLines : originalLines, format.mode);
+        exportButton.addEventListener("click", () => {
+          try {
+            downloadFile(result.text, lyricFilename(track, format.mode, result.extension));
+            notify(`已导出 ${result.lineCount} 行${format.label}`);
+          } catch (error) {
+            notify(error instanceof Error ? error.message : "导出失败", true);
+          }
+        });
+      } catch (error) {
+        exportButton.disabled = true;
+        detail = error instanceof Error ? error.message : "当前没有可导出的歌词";
+      }
+      root.appendChild(settingRow(format.label, detail, exportButton));
+    }
+    this.displayModal(`导出歌词 · ${track.title}`, root, true);
   }
 
   private async openEditor(track: TrackInfo): Promise<void> {
