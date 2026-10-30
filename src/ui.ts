@@ -30,66 +30,52 @@ interface SpicyModalElement extends HTMLElement {
   hide(): void;
 }
 
+/** Unsaved editor state, kept in memory so closing the modal never loses work. */
+interface Draft {
+  savedAt: number;
+  lines: TranslationLine[];
+  values: string[];
+}
+
+const MODAL_TITLE = "自定义翻译";
+
 function notify(message: string, isError = false): void {
   if (window.Spicetify?.showNotification) window.Spicetify.showNotification(message, isError, 4_000);
   else console[isError ? "error" : "info"](`LyricLayer: ${message}`);
 }
 
-function button(label: string, className = "", icon = ""): HTMLButtonElement {
-  const element = document.createElement("button");
-  element.type = "button";
-  element.className = `lyric-layer-button ${className}`.trim();
-  if (icon) {
-    const iconElement = document.createElement("span");
-    iconElement.className = "lyric-layer-button-icon";
-    iconElement.innerHTML = icon;
-    element.appendChild(iconElement);
-  }
-  const labelElement = document.createElement("span");
-  labelElement.textContent = label;
-  element.appendChild(labelElement);
-  return element;
-}
-
-function sectionTitle(label: string): HTMLParagraphElement {
-  const element = document.createElement("p");
-  element.className = "lyric-layer-section-title";
-  element.textContent = label;
-  return element;
-}
-
-function settingRow(label: string, description: string, control: HTMLElement, className = ""): HTMLDivElement {
-  const row = document.createElement("div");
-  row.className = `lyric-layer-setting-row ${className}`.trim();
-  const copy = document.createElement("div");
-  copy.className = "lyric-layer-setting-copy";
-  const title = document.createElement("span");
-  title.className = "lyric-layer-setting-label";
-  title.textContent = label;
-  const detail = document.createElement("span");
-  detail.className = "lyric-layer-setting-description";
-  detail.textContent = description;
-  copy.append(title, detail);
-  const action = document.createElement("div");
-  action.className = "lyric-layer-setting-control";
-  action.appendChild(control);
-  row.append(copy, action);
-  return row;
-}
-
 const ICONS = {
-  upload: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M5 15.5V19h14v-3.5"/></svg>',
-  edit: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.7 5.3 4 4M5 19l3.9-.8L19 7.1 16.9 5 5.8 15.1 5 19Z"/></svg>',
-  download: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v12m0 0 4.5-4.5M12 16l-4.5-4.5M5 19h14"/></svg>',
-  trash: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/></svg>',
-  back: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 5-7 7 7 7"/></svg>',
-  save: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h12l2 2v14H5V4Zm3 0v6h8V4M8 20v-6h8v6"/></svg>',
+  upload: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4m0 0L7.5 8.5M12 4l4.5 4.5M5 15.5V19h14v-3.5"/></svg>',
+  download: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0 4.5-4.5M12 15l-4.5-4.5M5 15.5V19h14v-3.5"/></svg>',
+  more: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h.01M12 12h.01M18 12h.01" stroke-width="3"/></svg>',
+  tune: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9m4 0h3M4 17h3m4 0h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg>',
 };
+
+function element<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] {
+  const node = document.createElement(tag);
+  node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function button(label: string, className = "", icon = ""): HTMLButtonElement {
+  const node = element("button", `ll-btn ${className}`.trim());
+  node.type = "button";
+  if (icon) {
+    const iconElement = element("span", "ll-btn-icon");
+    iconElement.innerHTML = icon;
+    node.appendChild(iconElement);
+  }
+  if (label) node.appendChild(element("span", "", label));
+  return node;
+}
 
 function resizeTextarea(input: HTMLTextAreaElement): void {
   input.style.height = "auto";
-  input.style.height = `${Math.max(42, input.scrollHeight)}px`;
+  input.style.height = `${Math.max(40, input.scrollHeight)}px`;
 }
+
+const cloneLine = (line: TranslationLine): TranslationLine => JSON.parse(JSON.stringify(line)) as TranslationLine;
 
 function canonicalize(lines: TranslationLine[], lyrics: LyricLine[], allowUnboundAlignment = false): TranslationLine[] {
   if (!lyrics.length) return lines;
@@ -134,6 +120,24 @@ async function chooseFile(accept: string): Promise<File | undefined> {
   });
 }
 
+type ImportKind = "txt" | "lrc" | "json";
+
+/** Trust the extension, then the content: users should not have to pick a format. */
+function importKind(file: { name?: string }, text: string): ImportKind {
+  const extension = file.name?.split(".").pop()?.toLowerCase();
+  if (extension === "json" || extension === "lrc" || extension === "txt") return extension;
+  if (text.replace(/^﻿/, "").trimStart().startsWith("{")) return "json";
+  return /^\s*\[\d{1,3}:\d{2}/m.test(text) ? "lrc" : "txt";
+}
+
+/** Blank rows are placeholders only when keeping them makes the file line up
+ * exactly with the lyrics; otherwise they are stanza breaks and are dropped. */
+function parseTxtFor(text: string, lyricCount: number): TranslationLine[] {
+  const compact = parseTxt(text, false);
+  const spaced = parseTxt(text, true);
+  return lyricCount && spaced.length === lyricCount && compact.length !== lyricCount ? spaced : compact;
+}
+
 function downloadJson(entry: TranslationEntry): void {
   const uriParts = entry.trackUri.split(":");
   const trackId = uriParts[uriParts.length - 1] ?? "track";
@@ -160,8 +164,138 @@ function lyricFilename(track: TrackInfo, mode: LyricExportMode, extension: strin
   return `${name || "lyrics"} - ${mode.startsWith("translation") ? "翻译" : "原文"}.${extension}`;
 }
 
+/** An in-app confirmation that matches the modal, instead of the browser's dialog. */
+function confirmDialog(options: { title: string; message: string; confirm: string; danger?: boolean }): Promise<boolean> {
+  return new Promise((resolve) => {
+    const backdrop = element("div", "ll-scope ll-dialog-backdrop");
+    const dialog = element("div", "ll-dialog");
+    dialog.setAttribute("role", "alertdialog");
+    dialog.setAttribute("aria-modal", "true");
+    const title = element("h2", "ll-dialog-title", options.title);
+    const message = element("p", "ll-dialog-text", options.message);
+    const actions = element("div", "ll-dialog-actions");
+    const cancel = button("取消");
+    const confirm = button(options.confirm, options.danger ? "danger" : "primary");
+    actions.append(cancel, confirm);
+    dialog.append(title, message, actions);
+    backdrop.appendChild(dialog);
+    const close = (result: boolean) => {
+      backdrop.remove();
+      resolve(result);
+    };
+    cancel.addEventListener("click", () => close(false));
+    confirm.addEventListener("click", () => close(true));
+    backdrop.addEventListener("pointerdown", (event) => { if (event.target === backdrop) close(false); });
+    dialog.addEventListener("keydown", (event) => {
+      // Escape belongs to this dialog, not to the modal underneath it.
+      if (event.key === "Escape") { event.stopPropagation(); event.preventDefault(); close(false); }
+      if (event.key === "Tab") {
+        event.preventDefault();
+        (document.activeElement === cancel ? confirm : cancel).focus();
+      }
+    });
+    (document.body ?? document.documentElement).appendChild(backdrop);
+    (options.danger ? cancel : confirm).focus();
+  });
+}
+
+interface MenuEntry {
+  label: string;
+  detail?: string;
+  ariaLabel?: string;
+  disabled?: boolean;
+  danger?: boolean;
+  action?: () => void | Promise<void>;
+  /** A custom control, rendered as-is instead of a clickable item. */
+  content?: HTMLElement;
+}
+type MenuContent = Array<MenuEntry | "separator" | { note: string }>;
+
+/** A small popover anchored to a toolbar button. Entries are built on open so
+ * they always reflect the current state. */
+function menu(trigger: HTMLButtonElement, build: () => MenuContent | Promise<MenuContent>): HTMLElement {
+  const anchor = element("div", "ll-menu-anchor");
+  const popover = element("div", "ll-menu");
+  popover.setAttribute("role", "menu");
+  popover.hidden = true;
+  trigger.setAttribute("aria-haspopup", "menu");
+  trigger.setAttribute("aria-expanded", "false");
+  anchor.append(trigger, popover);
+  let generation = 0;
+  const outside = (event: Event) => {
+    if (!anchor.contains(event.target as Node)) close();
+  };
+  const close = () => {
+    generation++;
+    popover.hidden = true;
+    trigger.setAttribute("aria-expanded", "false");
+    document.removeEventListener?.("pointerdown", outside, true);
+  };
+  const open = async () => {
+    const current = ++generation;
+    popover.replaceChildren(element("div", "ll-menu-note", "正在读取…"));
+    popover.hidden = false;
+    trigger.setAttribute("aria-expanded", "true");
+    document.addEventListener?.("pointerdown", outside, true);
+    let entries: MenuContent;
+    try {
+      entries = await build();
+    } catch (error) {
+      entries = [{ note: error instanceof Error ? error.message : "读取失败" }];
+    }
+    if (current !== generation) return;
+    popover.replaceChildren();
+    for (const entry of entries) {
+      if (entry === "separator") { popover.appendChild(element("div", "ll-menu-separator")); continue; }
+      if ("note" in entry) { popover.appendChild(element("div", "ll-menu-note", entry.note)); continue; }
+      if (entry.content) {
+        const row = element("div", "ll-menu-custom");
+        row.appendChild(entry.content);
+        popover.appendChild(row);
+        continue;
+      }
+      const item = element("button", `ll-menu-item${entry.danger ? " danger" : ""}`);
+      item.type = "button";
+      item.setAttribute("role", "menuitem");
+      item.disabled = !!entry.disabled;
+      if (entry.ariaLabel) item.setAttribute("aria-label", entry.ariaLabel);
+      item.append(element("span", "ll-menu-label", entry.label));
+      if (entry.detail) item.append(element("span", "ll-menu-detail", entry.detail));
+      item.addEventListener("click", () => {
+        close();
+        void entry.action?.();
+      });
+      popover.appendChild(item);
+    }
+  };
+  trigger.addEventListener("click", () => { if (popover.hidden) void open(); else close(); });
+  anchor.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !popover.hidden) {
+      event.stopPropagation();
+      close();
+      trigger.focus();
+    }
+  });
+  return anchor;
+}
+
+function switchControl(label: string, checked: boolean, onChange: (checked: boolean) => void): HTMLLabelElement {
+  const control = element("label", "ll-switch-row");
+  const copy = element("span", "ll-switch-copy");
+  copy.append(element("span", "ll-menu-label", label), element("span", "ll-menu-detail", "译文随原歌词逐字点亮、跳动"));
+  const input = element("input", "");
+  input.type = "checkbox";
+  input.checked = checked;
+  input.setAttribute("aria-label", label);
+  input.addEventListener("change", () => onChange(input.checked));
+  const track = element("span", "ll-switch");
+  control.append(copy, input, track);
+  return control;
+}
+
 export class TranslationUi {
   private modal?: SpicyModalElement;
+  private drafts = new Map<string, Draft>();
 
   constructor(private dependencies: UiDependencies) {}
 
@@ -185,362 +319,391 @@ export class TranslationUi {
     popup.display({ title, content, isLarge: true });
   }
 
-  private hideModal(): void {
-    if (this.modal?.isConnected) this.modal.hide();
-    else window.Spicetify?.PopupModal?.hide?.();
-  }
-
+  /** The translation editor is the home view: a song's translation is the
+   * document, and import, export and delete are actions on it. */
   async open(transition = false): Promise<void> {
     const track = this.dependencies.getTrack();
     if (!track?.uri) {
-      notify("当前没有可用的 Spotify Track URI", true);
+      notify("当前没有正在播放的 Spotify 歌曲", true);
       return;
     }
-    const entry = await this.dependencies.store.get(track.uri);
-    const root = document.createElement("div");
-    root.className = "lyric-layer-panel";
+    const [lyrics, existing] = await Promise.all([
+      this.dependencies.getLyrics(),
+      this.dependencies.store.get(track.uri),
+    ]);
+    const { store, onEntryChanged, getExportLyrics } = this.dependencies;
+    let saved = existing;
+    const savedLines = (): TranslationLine[] => lyrics.length
+      ? canonicalize(saved?.lines ?? [], lyrics)
+      : (saved?.lines ?? []).map((line, index) => ({ ...line, index: line.index ?? index }));
+    let editorLines = savedLines();
+    let baseline = "";
+    let dirty = false;
+    let saving = false;
+    let inputs: HTMLTextAreaElement[] = [];
+    let tuneButtons: HTMLButtonElement[] = [];
+    let rows: HTMLElement[] = [];
+    const visuallyEdited = new Set<number>();
 
-    const trackBox = document.createElement("div");
-    trackBox.className = "lyric-layer-track";
-    const cover = document.createElement("img");
-    cover.className = "lyric-layer-cover";
+    const root = element("div", "ll-scope lyric-layer-panel lyric-layer-editor");
+
+    // Header: what this is, how far along it is, and what can be done with it.
+    const head = element("div", "ll-head");
+    const cover = element("img", "ll-cover");
     cover.alt = "";
     if (track.coverUrl) cover.src = track.coverUrl;
-    const details = document.createElement("div");
-    details.className = "lyric-layer-track-details";
-    const title = document.createElement("div");
-    title.className = "lyric-layer-track-title";
-    title.textContent = track.title;
-    const artist = document.createElement("div");
-    artist.className = "lyric-layer-track-sub";
-    artist.textContent = track.artist;
-    const uri = document.createElement("div");
-    uri.className = "lyric-layer-uri";
-    uri.textContent = track.uri;
-    const status = document.createElement("span");
-    const savedLineCount = entry?.lines.filter((line) => line.translatedText.trim()).length ?? 0;
-    status.className = `lyric-layer-status${entry ? " active" : ""}`;
-    status.textContent = entry ? `已启用 · ${savedLineCount} 行` : "尚未添加翻译";
-    details.append(title, artist, uri);
-    trackBox.append(cover, details, status);
+    else cover.hidden = true;
+    const copy = element("div", "ll-head-copy");
+    const title = element("div", "ll-head-title", track.title);
+    const subtitle = element("div", "ll-head-sub");
+    copy.append(title, subtitle);
+    const actions = element("div", "ll-head-actions");
+    const importButton = button("导入", "small", ICONS.upload);
+    importButton.title = "从 TXT、LRC 或 LyricLayer JSON 导入，格式自动识别";
+    const exportTrigger = button("导出", "small", ICONS.download);
+    const moreTrigger = button("", "small icon", ICONS.more);
+    moreTrigger.setAttribute("aria-label", "更多");
+    moreTrigger.title = "更多";
+    head.append(cover, copy, actions);
 
-    const txtButton = button("选择文件", "secondary", ICONS.upload);
-    const lrcButton = button("选择文件", "secondary", ICONS.upload);
-    const jsonButton = button("选择文件", "secondary", ICONS.upload);
-    const editButton = button(entry ? "继续编辑" : "开始编辑", "primary", ICONS.edit);
-    const lyricsExportButton = button("选择格式", "secondary", ICONS.download);
-    const exportButton = button("导出", "secondary", ICONS.download);
-    const deleteButton = button("删除", "danger", ICONS.trash);
+    const banner = element("div", "ll-banner");
+    banner.hidden = true;
+    banner.setAttribute("role", "status");
+    const list = element("div", "ll-lines");
+    const footer = element("div", "ll-footer");
+    const status = element("p", "ll-footer-status");
+    const save = button("保存", "primary");
+    save.title = "Ctrl/Cmd + S";
+    footer.append(status, save);
+    root.append(head, banner, list, footer);
 
-    const option = document.createElement("label");
-    option.className = "lyric-layer-toggle";
-    const preserveEmpty = document.createElement("input");
-    preserveEmpty.type = "checkbox";
-    const toggleTrack = document.createElement("span");
-    toggleTrack.className = "lyric-layer-toggle-track";
-    option.append(preserveEmpty, toggleTrack);
+    const showBanner = (text: string, action?: { label: string; run: () => void }, tone: "info" | "warn" = "info") => {
+      banner.replaceChildren(element("span", "ll-banner-text", text));
+      banner.dataset.tone = tone;
+      if (action) {
+        const undo = button(action.label, "small quiet");
+        undo.addEventListener("click", () => { banner.hidden = true; action.run(); });
+        banner.appendChild(undo);
+      }
+      banner.hidden = false;
+    };
 
-    const animationOption = document.createElement("label");
-    animationOption.className = "lyric-layer-toggle";
-    const animationEnabled = document.createElement("input");
-    animationEnabled.type = "checkbox";
-    animationEnabled.checked = isTranslationAnimationEnabled();
-    animationEnabled.setAttribute("aria-label", "译文动态跟随");
-    animationEnabled.addEventListener("change", () => setTranslationAnimationEnabled(animationEnabled.checked));
-    const animationTrack = document.createElement("span");
-    animationTrack.className = "lyric-layer-toggle-track";
-    animationOption.append(animationEnabled, animationTrack);
+    const buildLines = (): TranslationLine[] => editorLines.map((line, position) => {
+      const translatedText = inputs[position]?.value ?? line.translatedText;
+      const { alignment, ...rest } = line;
+      // Phrase offsets are only valid for the exact source and translation.
+      // canonicalize already discarded alignment if the source changed.
+      return { ...rest, translatedText, ...(alignment && translatedText === line.translatedText ? { alignment } : {}) };
+    });
 
-    root.append(
-      trackBox,
-      sectionTitle("显示效果"),
-      settingRow("译文动态跟随", "跟随原歌词动画。", animationOption),
-      sectionTitle("添加翻译"),
-      settingRow("TXT 文件", "每一行对应一行原歌词，适合纯文本翻译。", txtButton),
-      settingRow("保留 TXT 空行", "开启后，空白行也会占用一个歌词位置。", option),
-      settingRow("LRC 文件", "根据时间戳自动匹配原歌词。", lrcButton),
-      settingRow("LyricLayer JSON", "导入之前导出的完整翻译备份。", jsonButton),
-      sectionTitle("编辑与管理"),
-      settingRow("逐行编辑", "编辑译文、对齐与动画。", editButton),
-      settingRow("导出歌词", "导出原文或翻译，用于制作翻译和歌词投稿。", lyricsExportButton),
-      settingRow("导出备份", "将当前歌曲翻译导出为可再次导入的 JSON。", exportButton),
-      settingRow("删除本地翻译", "只删除当前歌曲保存在此设备上的翻译。", deleteButton, "danger"),
-    );
+    const changed = () => {
+      const lines = buildLines();
+      dirty = JSON.stringify(lines) !== baseline;
+      const filled = lines.filter((line) => line.translatedText.trim()).length;
+      subtitle.textContent = editorLines.length
+        ? `${track.artist} · 已翻译 ${filled} / ${editorLines.length} 行`
+        : track.artist;
+      tuneButtons.forEach((tune, position) => {
+        const line = lines[position];
+        tune.dataset.custom = String(!!(line?.alignment || line?.motion));
+      });
+      status.dataset.dirty = String(dirty);
+      status.textContent = dirty ? "有未保存的修改"
+        : "Enter 下一句 · 粘贴多行会依次填入 · Ctrl/Cmd + S 保存";
+      save.disabled = !dirty || saving;
+      footer.hidden = !editorLines.length;
+      if (dirty) {
+        this.drafts.set(track.uri, { savedAt: saved?.updatedAt ?? 0,
+          lines: editorLines.map(cloneLine), values: inputs.map((input) => input.value) });
+      } else this.drafts.delete(track.uri);
+    };
 
-    const importFile = async (kind: "txt" | "lrc" | "json") => {
+    const focusRow = (position: number) => {
+      const target = inputs[position];
+      if (!target) return;
+      target.focus();
+      target.setSelectionRange?.(target.value.length, target.value.length);
+      rows[position]?.scrollIntoView?.({ block: "nearest" });
+    };
+
+    const openVisualEditor = (position: number) => {
+      const current = editorLines[position]!;
+      const input = inputs[position]!;
+      const translatedText = input.value;
+      const { alignment, ...rest } = current;
+      const draft: TranslationLine = { ...rest, translatedText,
+        ...(alignment && translatedText === current.translatedText ? { alignment } : {}) };
+      const source = lyrics.find((lyric) => lyric.index === current.index)
+        ?? { index: current.index ?? position, text: current.originalText ?? "", startTime: current.startTime };
+      const restoreEditor = () => {
+        // Reuse the existing form and its unsaved values, but give it a fresh
+        // modal scroller instead of inheriting the visual editor's position.
+        this.displayModal(MODAL_TITLE, root);
+        inputs.forEach(resizeTextarea);
+        changed();
+        tuneButtons[position]?.focus?.({ preventScroll: true });
+        rows[position]?.scrollIntoView?.({ block: "center", inline: "nearest", behavior: "auto" });
+      };
+      const visualEditor = createVisualEditor({ line: source, translation: draft,
+        onApply: (next) => {
+          editorLines[position] = { ...next, index: current.index,
+            originalText: current.originalText, startTime: current.startTime };
+          visuallyEdited.add(position);
+          input.value = next.translatedText;
+          restoreEditor();
+        }, onClose: restoreEditor });
+      // Spicy's transition retains the old scrollTop (and can mount content
+      // asynchronously). A fresh modal always opens this new view at the top.
+      this.displayModal(`第 ${position + 1} 行 · 对齐与动画`, visualEditor);
+    };
+
+    const renderRows = (values?: string[]) => {
+      list.replaceChildren();
+      inputs = [];
+      tuneButtons = [];
+      rows = [];
+      if (!editorLines.length) {
+        const empty = element("div", "ll-empty");
+        const retry = button("重新读取", "small");
+        retry.addEventListener("click", () => void this.open(true));
+        empty.append(
+          element("p", "ll-empty-title", "还没有取得这首歌的原歌词"),
+          element("p", "ll-empty-text", "请先在 Spicy Lyrics 中打开歌词页，等歌词加载完成后再试。也可以直接导入之前导出的 LyricLayer JSON 备份。"),
+          retry,
+        );
+        list.appendChild(empty);
+        return;
+      }
+      editorLines.forEach((line, position) => {
+        const row = element("div", "ll-row");
+        const index = element("div", "ll-row-index", String(position + 1));
+        const original = element("div", "ll-row-original", line.originalText ?? lyrics[position]?.text ?? "—");
+        const cell = element("div", "ll-row-translation");
+        const input = element("textarea", "ll-input");
+        input.rows = 1;
+        input.value = values?.[position] ?? line.translatedText;
+        input.placeholder = "输入译文";
+        input.setAttribute("aria-label", `第 ${position + 1} 行译文`);
+        input.addEventListener("input", () => {
+          resizeTextarea(input);
+          changed();
+        });
+        input.addEventListener("keydown", (event) => {
+          // Enter confirms an IME candidate while composing; never steal that.
+          if (event.isComposing || event.keyCode === 229) return;
+          const plain = !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey;
+          if (event.key === "Enter" && plain) {
+            event.preventDefault();
+            focusRow(position + 1);
+          } else if (plain && event.key === "ArrowDown" && input.selectionStart === input.value.length
+            && input.selectionEnd === input.value.length && inputs[position + 1]) {
+            event.preventDefault();
+            focusRow(position + 1);
+          } else if (plain && event.key === "ArrowUp" && input.selectionStart === 0 && input.selectionEnd === 0
+            && inputs[position - 1]) {
+            event.preventDefault();
+            focusRow(position - 1);
+          }
+        });
+        input.addEventListener("paste", (event) => {
+          const text = event.clipboardData?.getData("text/plain") ?? "";
+          if (!/[\r\n]/.test(text)) return;
+          event.preventDefault();
+          let pasted = text.replace(/\r\n?/g, "\n").split("\n");
+          if (pasted[pasted.length - 1] === "") pasted = pasted.slice(0, -1);
+          pasted.forEach((value, offset) => {
+            const target = inputs[position + offset];
+            if (!target) return;
+            target.value = value;
+            resizeTextarea(target);
+          });
+          changed();
+          const overflow = pasted.length - (inputs.length - position);
+          showBanner(overflow > 0
+            ? `已填入 ${pasted.length - overflow} 行，剩余 ${overflow} 行超出歌词末尾，未使用`
+            : `已从第 ${position + 1} 行起依次填入 ${pasted.length} 行`);
+        });
+        const tune = element("button", "ll-row-tune");
+        tune.type = "button";
+        tune.innerHTML = ICONS.tune;
+        tune.title = "对齐与动画";
+        tune.setAttribute("aria-label", `调整第 ${position + 1} 行的对齐与动画`);
+        tune.addEventListener("click", () => openVisualEditor(position));
+        cell.append(input, tune);
+        row.append(index, original, cell);
+        list.appendChild(row);
+        inputs.push(input);
+        tuneButtons.push(tune);
+        rows.push(row);
+      });
+      inputs.forEach(resizeTextarea);
+    };
+
+    const snapshot = (): Draft => ({ savedAt: saved?.updatedAt ?? 0,
+      lines: editorLines.map(cloneLine), values: inputs.map((input) => input.value) });
+    const restore = (state: Draft) => {
+      editorLines = state.lines.map(cloneLine);
+      visuallyEdited.clear();
+      renderRows(state.values);
+      changed();
+    };
+    const replaceLines = (lines: TranslationLine[], message: string) => {
+      const before = snapshot();
+      editorLines = lines.map(cloneLine);
+      visuallyEdited.clear();
+      renderRows();
+      changed();
+      showBanner(`${message}。确认无误后保存。`, { label: "撤销导入", run: () => restore(before) });
+    };
+
+    const importFile = async () => {
       try {
-        const file = await chooseFile(kind === "txt" ? ".txt,text/plain" : kind === "lrc" ? ".lrc,text/plain" : ".json,application/json");
+        const file = await chooseFile(".txt,.lrc,.json,text/plain,application/json");
         if (!file) return;
         const text = await file.text();
-        const lyrics = await this.dependencies.getLyrics();
+        const kind = importKind(file, text);
         if (kind === "json") {
           const parsed = parseJson(text);
-          let targetTrack = track;
           if (parsed.trackUri && parsed.trackUri !== track.uri) {
-            const accepted = window.confirm(`JSON 属于 ${parsed.trackUri}，是否按该 URI 导入？`);
+            const name = parsed.entry?.title ? `《${parsed.entry.title}》` : "另一首歌";
+            const accepted = await confirmDialog({
+              title: "这是另一首歌的翻译",
+              message: `文件属于${name}，不是当前播放的《${track.title}》。要直接保存到${name}吗？当前歌曲的翻译不受影响。`,
+              confirm: `保存到${name}`,
+            });
             if (!accepted) return;
-            targetTrack = { ...track, uri: parsed.trackUri };
+            const target: TrackInfo = { ...track, uri: parsed.trackUri,
+              title: parsed.entry?.title ?? track.title, artist: parsed.entry?.artist ?? track.artist };
+            const previous = await store.get(target.uri);
+            const imported = parsed.entry
+              ? { ...parsed.entry, lines: parsed.lines, trackUri: target.uri, updatedAt: Date.now() }
+              : entryFrom(target, parsed.lines, previous);
+            await store.save(imported);
+            await onEntryChanged(target.uri);
+            notify(`已保存到${name}`);
+            return;
           }
-          const previous = await this.dependencies.store.get(targetTrack.uri);
-          const imported = parsed.entry
-            ? { ...parsed.entry, lines: parsed.lines, trackUri: targetTrack.uri, updatedAt: Date.now() }
-            : entryFrom(targetTrack, targetTrack.uri === track.uri ? canonicalize(parsed.lines, lyrics, true) : parsed.lines, previous);
-          if (targetTrack.uri === track.uri) {
-            const matches = matchTranslations(lyrics, imported.lines);
-            for (const lyric of lyrics) {
-              const line = matches.get(lyric.index);
-              if (!line?.alignment?.some(part => part.startTime !== undefined || part.endTime !== undefined) && !line?.motion) continue;
-              const error = validateVisualTranslation(lyric, line!);
+          const lines = canonicalize(parsed.lines, lyrics, true);
+          if (lyrics.length) {
+            for (const [position, line] of lines.entries()) {
+              const lyric = lyrics[position];
+              if (!lyric || (!line.alignment?.some((part) => part.startTime !== undefined || part.endTime !== undefined) && !line.motion)) continue;
+              const error = validateVisualTranslation(lyric, line);
               if (error) throw new Error(`第 ${lyric.index + 1} 行：${error}`);
             }
           }
-          await this.dependencies.store.save(imported);
-          await this.dependencies.onEntryChanged(targetTrack.uri);
-          notify(`已导入 ${imported.lines.length} 行 JSON 翻译`);
-        } else {
-          const parsed = kind === "txt" ? parseTxt(text, preserveEmpty.checked) : parseLrc(text);
-          const imported = entryFrom(track, canonicalize(parsed, lyrics), entry);
-          await this.dependencies.store.save(imported);
-          await this.dependencies.onEntryChanged(track.uri);
-          notify(`已导入 ${parsed.length} 行 ${kind.toUpperCase()} 翻译`);
+          const count = lines.filter((line) => line.translatedText.trim()).length;
+          replaceLines(lines, `已导入 JSON 备份中的 ${count} 行译文`);
+          return;
         }
-        this.hideModal();
+        if (!lyrics.length) throw new Error("还没有取得原歌词，暂时只能导入 LyricLayer JSON 备份");
+        if (kind === "txt") {
+          const parsed = parseTxtFor(text, lyrics.length);
+          replaceLines(canonicalize(parsed, lyrics), parsed.length === lyrics.length
+            ? `已导入 ${parsed.length} 行，与原歌词逐行对应`
+            : `已导入 ${parsed.length} 行，但原歌词有 ${lyrics.length} 行，请检查是否错位`);
+        } else {
+          const lines = canonicalize(parseLrc(text), lyrics);
+          const matched = lines.filter((line) => line.translatedText.trim()).length;
+          replaceLines(lines, `已按时间戳匹配 ${matched} / ${lyrics.length} 行`);
+        }
       } catch (error) {
         notify(error instanceof Error ? error.message : "导入失败", true);
       }
     };
 
-    txtButton.addEventListener("click", () => void importFile("txt"));
-    lrcButton.addEventListener("click", () => void importFile("lrc"));
-    jsonButton.addEventListener("click", () => void importFile("json"));
-    editButton.addEventListener("click", () => void this.openEditor(track));
-    lyricsExportButton.addEventListener("click", async () => {
-      lyricsExportButton.disabled = true;
-      try {
-        await this.openLyricsExport(track);
-      } catch (error) {
-        notify(error instanceof Error ? error.message : "读取歌词失败", true);
-      } finally {
-        lyricsExportButton.disabled = false;
-      }
-    });
-    exportButton.disabled = !entry;
-    exportButton.addEventListener("click", () => { if (entry) downloadJson(entry); });
-    deleteButton.disabled = !entry;
-    deleteButton.addEventListener("click", async () => {
-      if (!entry || !window.confirm("确定删除当前歌曲的本地翻译吗？")) return;
-      await this.dependencies.store.delete(track.uri);
-      await this.dependencies.onEntryChanged(track.uri);
-      this.hideModal();
-      notify("已删除当前歌曲的翻译");
-    });
-
-    this.displayModal("自定义翻译", root, transition);
-  }
-
-  private async openLyricsExport(track: TrackInfo): Promise<void> {
-    const [lyrics, entry] = await Promise.all([
-      this.dependencies.getExportLyrics(track.uri),
-      this.dependencies.store.get(track.uri),
-    ]);
-    const savedLines = entry?.lines ?? [];
-    const originalLines = lyrics.length
-      ? lyrics.map((line) => ({ originalText: line.text, startTime: line.startTime, translatedText: "" }))
-      : savedLines;
-    const matches = matchTranslations(lyrics, savedLines);
-    // Keep every saved translation, even if the current provider has different
-    // lines or only static lyrics. Missing source timing must not erase saved timing.
-    const translationLines = savedLines.map((line) => ({
-      ...line,
-      startTime: lyrics.find((lyric) => matches.get(lyric.index) === line)?.startTime ?? line.startTime,
-    }));
-    const root = document.createElement("div");
-    root.className = "lyric-layer-panel";
-    const toolbar = document.createElement("div");
-    toolbar.className = "lyric-layer-editor-toolbar";
-    const back = button("返回", "quiet", ICONS.back);
-    back.addEventListener("click", () => void this.open(true));
-    toolbar.appendChild(back);
-    const description = document.createElement("p");
-    description.className = "lyric-layer-export-description";
-    description.textContent = lyrics.length
-      ? "导出 Spicy Lyrics 的主歌词；翻译使用已保存的内容。"
-      : entry?.lines.length
-        ? "当前原歌词暂不可用，使用已保存的歌词内容导出。"
-        : "还没有取得原歌词，请先打开 Spicy Lyrics 歌词页，等待加载完成后重试。";
-    root.append(toolbar, description);
-
-    const formats: Array<{ mode: LyricExportMode; label: string; description: string }> = [
-      { mode: "original", label: "仅原文", description: "纯文本，每行一句，方便对照原文制作翻译。" },
-      { mode: "original-timed", label: "原文带时间戳", description: "保留原歌词时间轴，格式为 [00:30.660]原文。" },
-      { mode: "translation", label: "仅翻译", description: "纯文本，只包含已填写的译文，跳过未翻译行。" },
-      { mode: "translation-timed", label: "翻译带时间戳", description: "译文沿用对应原歌词的时间戳，跳过未翻译行。" },
-    ];
-    for (const format of formats) {
-      if (format.mode === "original") root.appendChild(sectionTitle("原文"));
-      if (format.mode === "translation") root.appendChild(sectionTitle("翻译"));
-      const exportButton = button(format.mode.endsWith("-timed") ? "导出 LRC" : "导出 TXT", "secondary", ICONS.download);
-      exportButton.setAttribute("aria-label", `导出${format.label}`);
-      let detail = format.description;
-      try {
-        const result = exportLyrics(format.mode.startsWith("translation") ? translationLines : originalLines, format.mode);
-        exportButton.addEventListener("click", () => {
-          try {
+    const exportEntries = async (): Promise<MenuContent> => {
+      const [exportLyricsLines, entry] = await Promise.all([
+        getExportLyrics(track.uri),
+        store.get(track.uri),
+      ]);
+      const savedTranslation = entry?.lines ?? [];
+      const originalLines = exportLyricsLines.length
+        ? exportLyricsLines.map((line) => ({ originalText: line.text, startTime: line.startTime, translatedText: "" }))
+        : savedTranslation;
+      const matches = matchTranslations(exportLyricsLines, savedTranslation);
+      // Keep every saved translation, even if the current provider has different
+      // lines or only static lyrics. Missing source timing must not erase saved timing.
+      const translationLines = savedTranslation.map((line) => ({
+        ...line,
+        startTime: exportLyricsLines.find((lyric) => matches.get(lyric.index) === line)?.startTime ?? line.startTime,
+      }));
+      const formats: Array<{ mode: LyricExportMode; label: string; detail: string; ariaLabel: string; name: string }> = [
+        { mode: "original", label: "原文 · TXT", detail: "纯文本，每行一句", ariaLabel: "导出仅原文", name: "原文" },
+        { mode: "original-timed", label: "原文 · LRC", detail: "带时间戳，如 [00:30.660]", ariaLabel: "导出原文带时间戳", name: "带时间戳的原文" },
+        { mode: "translation", label: "译文 · TXT", detail: "纯文本，跳过未翻译的行", ariaLabel: "导出仅翻译", name: "译文" },
+        { mode: "translation-timed", label: "译文 · LRC", detail: "沿用原歌词的时间戳", ariaLabel: "导出翻译带时间戳", name: "带时间戳的译文" },
+      ];
+      const content: MenuContent = [];
+      if (dirty) content.push({ note: "有未保存的修改，译文导出的是上次保存的版本" });
+      for (const format of formats) {
+        try {
+          const result = exportLyrics(format.mode.startsWith("translation") ? translationLines : originalLines, format.mode);
+          content.push({ label: format.label, detail: format.detail, ariaLabel: format.ariaLabel, action: () => {
             downloadFile(result.text, lyricFilename(track, format.mode, result.extension));
-            notify(`已导出 ${result.lineCount} 行${format.label}`);
-          } catch (error) {
-            notify(error instanceof Error ? error.message : "导出失败", true);
-          }
-        });
-      } catch (error) {
-        exportButton.disabled = true;
-        detail = error instanceof Error ? error.message : "当前没有可导出的歌词";
+            notify(`已导出 ${result.lineCount} 行${format.name}`);
+          } });
+        } catch (error) {
+          content.push({ label: format.label, ariaLabel: format.ariaLabel, disabled: true,
+            detail: error instanceof Error ? error.message : "当前没有可导出的歌词" });
+        }
+        if (format.mode === "original-timed") content.push("separator");
       }
-      root.appendChild(settingRow(format.label, detail, exportButton));
-    }
-    this.displayModal(`导出歌词 · ${track.title}`, root, true);
-  }
-
-  private async openEditor(track: TrackInfo): Promise<void> {
-    const [lyrics, existing] = await Promise.all([
-      this.dependencies.getLyrics(),
-      this.dependencies.store.get(track.uri),
-    ]);
-    const editorLines: TranslationLine[] = lyrics.length
-      ? canonicalize(existing?.lines ?? [], lyrics)
-      : (existing?.lines ?? []).map((line, index) => ({ ...line, index: line.index ?? index }));
-    if (!editorLines.length) {
-      notify("还没有取得原歌词。请先打开 Spicy Lyrics 歌词页，再重试。", true);
-      return;
-    }
-
-    const root = document.createElement("div");
-    root.className = "lyric-layer-panel lyric-layer-editor";
-    const toolbar = document.createElement("div");
-    toolbar.className = "lyric-layer-editor-toolbar";
-    const back = button("返回", "quiet", ICONS.back);
-    back.addEventListener("click", () => void this.open(true));
-    const progress = document.createElement("span");
-    progress.className = "lyric-layer-editor-progress";
-    const updateProgress = () => {
-      progress.textContent = `已填写 ${inputs.filter((input) => input.value.trim()).length} / ${editorLines.length} 行`;
+      content.push("separator", { label: "备份 · JSON", ariaLabel: "导出备份", disabled: !entry,
+        detail: entry ? "含对齐与动画设置，可再次导入" : "保存翻译后才能导出备份",
+        action: () => { if (entry) downloadJson(entry); } });
+      return content;
     };
-    toolbar.append(back, progress);
-    root.appendChild(toolbar);
-    const head = document.createElement("div");
-    head.className = "lyric-layer-editor-head";
-    head.innerHTML = "<span>#</span><span>原歌词（只读）</span><span>中文翻译</span>";
-    root.appendChild(head);
-    const inputs: HTMLTextAreaElement[] = [];
-    const visuallyEdited = new Set<number>();
-    editorLines.forEach((line, position) => {
-      const row = document.createElement("div");
-      row.className = "lyric-layer-editor-row";
-      const index = document.createElement("div");
-      index.className = "lyric-layer-editor-index";
-      index.textContent = String(position + 1);
-      const original = document.createElement("div");
-      original.className = "lyric-layer-original";
-      original.textContent = line.originalText ?? lyrics[position]?.text ?? "—";
-      const input = document.createElement("textarea");
-      input.className = "lyric-layer-input";
-      input.rows = 1;
-      input.value = line.translatedText;
-      input.placeholder = "输入中文翻译";
-      input.addEventListener("input", () => {
-        resizeTextarea(input);
-        updateProgress();
-      });
-      input.addEventListener("paste", (event) => {
-        const text = event.clipboardData?.getData("text/plain") ?? "";
-        if (!/[\r\n]/.test(text)) return;
-        event.preventDefault();
-        let rows = text.replace(/\r\n?/g, "\n").split("\n");
-        if (rows[rows.length - 1] === "") rows = rows.slice(0, -1);
-        rows.forEach((value, offset) => {
-          const target = inputs[position + offset];
-          if (!target) return;
-          target.value = value;
-          resizeTextarea(target);
-        });
-        updateProgress();
-      });
-      inputs.push(input);
-      const translationCell = document.createElement("div");
-      translationCell.className = "lyric-layer-editor-translation";
-      const visual = button("可视化编辑", "quiet");
-      visual.setAttribute("aria-label", `可视化编辑第 ${position + 1} 行`);
-      visual.addEventListener("click", () => {
-        const current = editorLines[position]!;
-        const translatedText = input.value;
-        const { alignment, ...rest } = current;
-        const draft: TranslationLine = { ...rest, translatedText,
-          ...(alignment && translatedText === current.translatedText ? { alignment } : {}) };
-        const source = lyrics.find(lyric => lyric.index === current.index)
-          ?? { index: current.index ?? position, text: current.originalText ?? "", startTime: current.startTime };
-        const restoreEditor = () => {
-          // Reuse the existing form and its unsaved values, but give it a fresh
-          // modal scroller instead of inheriting the visual editor's position.
-          this.displayModal(`编辑翻译 · ${track.title}`, root);
-          inputs.forEach(resizeTextarea);
-          updateProgress();
-          visual.focus?.({ preventScroll: true });
-          row.scrollIntoView?.({ block: "center", inline: "nearest", behavior: "auto" });
-        };
-        const visualEditor = createVisualEditor({ line: source, translation: draft,
-          onApply: next => {
-            editorLines[position] = { ...next, index: current.index,
-              originalText: current.originalText, startTime: current.startTime };
-            visuallyEdited.add(position);
-            input.value = next.translatedText;
-            restoreEditor();
-          }, onClose: restoreEditor });
-        // Spicy's transition retains the old scrollTop (and can mount content
-        // asynchronously). A fresh modal always opens this new view at the top.
-        this.displayModal(`可视化编辑 · 第 ${position + 1} 行`, visualEditor);
-      });
-      translationCell.append(input, visual);
-      row.append(index, original, translationCell);
-      root.appendChild(row);
-    });
 
-    const footer = document.createElement("div");
-    footer.className = "lyric-layer-editor-footer";
-    const hint = document.createElement("span");
-    hint.className = "lyric-layer-hint";
-    hint.textContent = "支持粘贴多行 · Ctrl/Cmd + S 保存";
-    const save = button("保存翻译", "primary", ICONS.save);
-    footer.append(hint, save);
-    root.appendChild(footer);
-    inputs.forEach(resizeTextarea);
-    updateProgress();
+    const moreEntries = (): MenuContent => [
+      { label: "译文动态跟随", content: switchControl("译文动态跟随", isTranslationAnimationEnabled(), setTranslationAnimationEnabled) },
+      "separator",
+      { label: "删除这首歌的翻译…", danger: true, disabled: !saved, ariaLabel: "删除这首歌的翻译",
+        detail: saved ? "只删除保存在这台设备上的内容" : "还没有保存过翻译", action: async () => {
+          const accepted = await confirmDialog({
+            title: "删除这首歌的翻译？",
+            message: `《${track.title}》保存在这台设备上的译文、对齐和动画设置都会被删除，无法恢复。`,
+            confirm: "删除",
+            danger: true,
+          });
+          if (!accepted) return;
+          await store.delete(track.uri);
+          await onEntryChanged(track.uri);
+          this.drafts.delete(track.uri);
+          notify("已删除这首歌的翻译");
+          await this.open(true);
+        } },
+    ];
 
-    let saving = false;
+    actions.append(importButton, menu(exportTrigger, exportEntries), menu(moreTrigger, moreEntries));
+    importButton.addEventListener("click", () => void importFile());
+
     const saveEditor = async () => {
-      if (saving) return;
+      if (saving || !dirty) return;
       saving = true;
+      save.disabled = true;
       try {
-        const lines = editorLines.map((line, position) => {
-          const translatedText = inputs[position]?.value ?? "";
-          const { alignment, ...rest } = line;
-          // Phrase offsets are only valid for the exact source and translation.
-          // canonicalize already discarded alignment if the source changed.
-          return { ...rest, translatedText, ...(alignment && translatedText === line.translatedText ? { alignment } : {}) };
-        });
+        const lines = buildLines();
         for (const [position, line] of lines.entries()) {
           if (!visuallyEdited.has(position)) continue;
-          const source = lyrics.find(lyric => lyric.index === line.index);
+          const source = lyrics.find((lyric) => lyric.index === line.index);
           if (!source || (!line.alignment && !line.motion)) continue;
           const error = validateVisualTranslation(source, line);
           if (error) throw new Error(`第 ${(line.index ?? 0) + 1} 行：${error}`);
         }
-        await this.dependencies.store.save(entryFrom(track, lines, existing));
-        await this.dependencies.onEntryChanged(track.uri);
-        this.hideModal();
-        notify("翻译已保存并刷新");
+        const entry = entryFrom(track, lines, saved);
+        await store.save(entry);
+        await onEntryChanged(track.uri);
+        saved = entry;
+        editorLines = lines.map(cloneLine);
+        baseline = JSON.stringify(lines);
+        banner.hidden = true;
+        notify("翻译已保存");
       } catch (error) {
-        saving = false;
         notify(error instanceof Error ? error.message : "保存失败", true);
+      } finally {
+        saving = false;
+        changed();
       }
     };
     save.addEventListener("click", () => void saveEditor());
@@ -550,6 +713,19 @@ export class TranslationUi {
         void saveEditor();
       }
     });
-    this.displayModal(`编辑翻译 · ${track.title}`, root, true);
+
+    renderRows();
+    baseline = JSON.stringify(buildLines());
+    const draft = this.drafts.get(track.uri);
+    if (draft && draft.savedAt === (saved?.updatedAt ?? 0) && draft.lines.length === editorLines.length
+      && draft.lines.every((line, position) => line.originalText === editorLines[position]?.originalText)) {
+      const clean = snapshot();
+      restore(draft);
+      showBanner("已恢复上次未保存的修改", { label: "放弃修改", run: () => restore(clean) });
+    } else {
+      this.drafts.delete(track.uri);
+      changed();
+    }
+    this.displayModal(MODAL_TITLE, root, transition);
   }
 }

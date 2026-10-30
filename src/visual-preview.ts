@@ -26,12 +26,15 @@ const SNAPSHOT_PROPERTIES = [
 // The editor can be outside #SpicyLyricsPage; these are the same layout rules
 // used by the renderer, scoped here so a modal needs no dependency on page CSS.
 const PREVIEW_CSS = `
-.lyric-layer-visual-preview { border:1px solid #ffffff26; border-radius:10px; padding:12px; min-width:0; color:inherit; }
-.lyric-layer-visual-preview .ll-preview-heading { display:flex; flex-wrap:wrap; align-items:center; gap:8px; font-size:13px; margin-bottom:8px; }
-.lyric-layer-visual-preview .ll-preview-note { opacity:.7; font-size:12px; }
+.lyric-layer-visual-preview { border-radius:12px; padding:12px; min-width:0; color:inherit; background:var(--ll-fill, #ffffff0f); }
+.lyric-layer-visual-preview .ll-preview-heading { display:flex; flex-wrap:wrap; align-items:center; gap:8px; font-size:12px; margin-bottom:8px; color:var(--ll-text-2, #ffffff99); }
+.lyric-layer-visual-preview .ll-preview-heading strong { color:var(--ll-text, #fff); font-weight:600; }
+.lyric-layer-visual-preview .ll-preview-note { color:var(--ll-text-3, #ffffff66); font-size:12px; }
+.lyric-layer-visual-preview .ll-preview-mode select { appearance:none; padding:2px 22px 2px 8px; border:0; border-radius:6px; color:inherit; font:inherit; cursor:pointer; background:var(--ll-fill-strong, #ffffff1a) url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2710%27 height=%276%27%3E%3Cpath d=%27M1 1l4 4 4-4%27 fill=%27none%27 stroke=%27white%27 stroke-opacity=%27.6%27 stroke-width=%271.5%27/%3E%3C/svg%3E") no-repeat right 7px center; }
+.lyric-layer-visual-preview .ll-preview-mode option { color:#fff; background:#242424; }
 .lyric-layer-visual-preview .ll-preview-mode { display:flex; align-items:center; gap:6px; margin-left:auto; font-size:12px; }
 .lyric-layer-visual-preview .ll-preview-mode[hidden] { display:none; }
-.lyric-layer-visual-preview .ll-preview-stage { position:relative; display:block; width:100%; min-height:100px; padding:12px 6px; box-sizing:border-box; overflow:hidden; background:#0002; border-radius:6px; }
+.lyric-layer-visual-preview .ll-preview-stage { position:relative; display:block; width:100%; min-height:100px; padding:12px 6px; box-sizing:border-box; overflow:hidden; background:rgba(0,0,0,.22); border-radius:8px; }
 .lyric-layer-visual-preview .ll-preview-line { position:static!important; width:100%!important; max-width:100%!important; height:auto!important; margin:0!important; padding:0!important; opacity:1!important; visibility:visible!important; transform:none!important; scale:1!important; translate:none!important; rotate:none!important; filter:none!important; }
 .lyric-layer-visual-preview .ll-preview-line, .lyric-layer-visual-preview .ll-preview-line * { animation:none!important; transition:none!important; }
 .lyric-layer-visual-preview [data-ll-preview-source] { transform:none!important; scale:1!important; translate:none!important; rotate:none!important; position:static!important; opacity:1!important; visibility:visible!important; pointer-events:none!important; }
@@ -42,10 +45,11 @@ const PREVIEW_CSS = `
 .lyric-layer-visual-preview .lyric-layer-segment[data-lyric-layer-native]::before { content:attr(data-lyric-layer-reserve); grid-area:1/1; font-size:1.05em; visibility:hidden; white-space:inherit; }
 .lyric-layer-visual-preview .lyric-layer-segment[data-lyric-layer-native] > .lyric-layer-motion-ink { grid-area:1/1; justify-self:center; align-self:center; }
 .lyric-layer-visual-preview .ll-preview-controls { display:flex; align-items:center; gap:8px; margin-top:10px; font-size:12px; }
-.lyric-layer-visual-preview .ll-preview-controls button { flex:0 0 auto; padding:5px 10px; border:1px solid #ffffff26; border-radius:6px; color:inherit; background:#ffffff0d; cursor:pointer; }
-.lyric-layer-visual-preview .ll-preview-controls button:hover:not(:disabled) { background:#ffffff1f; }
-.lyric-layer-visual-preview .ll-preview-controls input[type=range] { min-width:60px; flex:1; accent-color:#1ed760; }
-.lyric-layer-visual-preview .ll-preview-time { flex:0 0 auto; min-width:82px; text-align:right; font-variant-numeric:tabular-nums; }
+.lyric-layer-visual-preview .ll-preview-controls button { flex:0 0 auto; min-width:52px; padding:5px 12px; border:0; border-radius:7px; color:inherit; font:inherit; font-weight:500; background:var(--ll-fill-strong, #ffffff1a); cursor:pointer; }
+.lyric-layer-visual-preview .ll-preview-controls button:hover:not(:disabled) { background:var(--ll-fill-hover, #ffffff29); }
+.lyric-layer-visual-preview .ll-preview-controls button:disabled { opacity:.4; cursor:default; }
+.lyric-layer-visual-preview .ll-preview-controls input[type=range] { min-width:60px; flex:1; accent-color:var(--ll-accent, #fff); }
+.lyric-layer-visual-preview .ll-preview-time { flex:0 0 auto; min-width:82px; text-align:right; color:var(--ll-text-2, #ffffff99); font-variant-numeric:tabular-nums; }
 @media (prefers-reduced-motion:reduce) {
   .lyric-layer-visual-preview .lyric-layer-segment, .lyric-layer-visual-preview .lyric-layer-motion-ink { transform:none!important; scale:none!important; translate:none!important; rotate:none!important; text-shadow:none!important; }
 }
