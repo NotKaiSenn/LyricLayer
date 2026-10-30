@@ -13,6 +13,36 @@ export interface TranslationLine {
   startTime?: number;
   originalText?: string;
   translatedText: string;
+  alignment?: TranslationAlignment[];
+  motion?: TranslationMotionSettings;
+}
+
+export interface TranslationMotionSettings {
+  /** Multiplier of native scale delta and displacement; 0–2, default 1. */
+  amplitude?: number;
+  /** Share of source activity used for staggered starts; 0–0.8, default 0.4. */
+  stagger?: number;
+  /** Smooth return before the source deadline, in milliseconds; 100–1000. */
+  settleMs?: number;
+}
+
+/** Optional human/AI phrase mapping into the original syllable array. */
+export interface TranslationAlignment {
+  sourceStart: number;
+  /** Exclusive syllable index. */
+  sourceEnd: number;
+  text: string;
+  /** Optional paired override of this phrase's absolute track time, in ms. */
+  startTime?: number;
+  endTime?: number;
+}
+
+export interface LyricSyllable {
+  text: string;
+  /** Absolute track time in milliseconds. */
+  startTime: number;
+  endTime: number;
+  isPartOfWord?: boolean;
 }
 
 export interface LyricLine {
@@ -20,6 +50,7 @@ export interface LyricLine {
   text: string;
   startTime?: number;
   endTime?: number;
+  syllables?: LyricSyllable[];
 }
 
 export interface TrackInfo {
@@ -40,6 +71,8 @@ export interface SpicetifyPlayerItem {
 export interface SpicetifyApi {
   Player?: {
     data?: { item?: SpicetifyPlayerItem };
+    getProgress?: () => number;
+    isPlaying?: () => boolean;
     addEventListener?: (event: string, listener: (event?: unknown) => void) => void;
     removeEventListener?: (event: string, listener: (event?: unknown) => void) => void;
   };

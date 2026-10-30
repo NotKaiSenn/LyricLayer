@@ -2,6 +2,9 @@ import { matchTranslations } from "./matcher";
 import { exportLyrics, type LyricExportMode } from "./lyric-export";
 import { parseJson, parseLrc, parseTxt } from "./parsers";
 import type { TranslationStore } from "./storage";
+import { isTranslationAnimationEnabled, setTranslationAnimationEnabled } from "./translation-settings";
+import { createVisualEditor } from "./visual-editor";
+import { validateVisualTranslation } from "./translation-timing";
 import type { LyricLine, TrackInfo, TranslationEntry, TranslationLine } from "./types";
 
 interface UiDependencies {
@@ -88,15 +91,22 @@ function resizeTextarea(input: HTMLTextAreaElement): void {
   input.style.height = `${Math.max(42, input.scrollHeight)}px`;
 }
 
-function canonicalize(lines: TranslationLine[], lyrics: LyricLine[]): TranslationLine[] {
+function canonicalize(lines: TranslationLine[], lyrics: LyricLine[], allowUnboundAlignment = false): TranslationLine[] {
   if (!lyrics.length) return lines;
   const matches = matchTranslations(lyrics, lines);
-  return lyrics.map((lyric) => ({
-    index: lyric.index,
-    startTime: lyric.startTime,
-    originalText: lyric.text,
-    translatedText: matches.get(lyric.index)?.translatedText ?? "",
-  }));
+  return lyrics.map((lyric) => {
+    const saved = matches.get(lyric.index);
+    const alignment = saved?.alignment && (saved.originalText === lyric.text
+      || (allowUnboundAlignment && saved.originalText === undefined)) ? saved.alignment : undefined;
+    return {
+      index: lyric.index,
+      startTime: lyric.startTime,
+      originalText: lyric.text,
+      translatedText: saved?.translatedText ?? "",
+      ...(alignment ? { alignment } : {}),
+      ...(saved?.motion ? { motion: { ...saved.motion } } : {}),
+    };
+  });
 }
 
 function entryFrom(track: TrackInfo, lines: TranslationLine[], existing?: TranslationEntry): TranslationEntry {
@@ -230,15 +240,28 @@ export class TranslationUi {
     toggleTrack.className = "lyric-layer-toggle-track";
     option.append(preserveEmpty, toggleTrack);
 
+    const animationOption = document.createElement("label");
+    animationOption.className = "lyric-layer-toggle";
+    const animationEnabled = document.createElement("input");
+    animationEnabled.type = "checkbox";
+    animationEnabled.checked = isTranslationAnimationEnabled();
+    animationEnabled.setAttribute("aria-label", "译文动态跟随");
+    animationEnabled.addEventListener("change", () => setTranslationAnimationEnabled(animationEnabled.checked));
+    const animationTrack = document.createElement("span");
+    animationTrack.className = "lyric-layer-toggle-track";
+    animationOption.append(animationEnabled, animationTrack);
+
     root.append(
       trackBox,
+      sectionTitle("显示效果"),
+      settingRow("译文动态跟随", "跟随原歌词动画。", animationOption),
       sectionTitle("添加翻译"),
       settingRow("TXT 文件", "每一行对应一行原歌词，适合纯文本翻译。", txtButton),
       settingRow("保留 TXT 空行", "开启后，空白行也会占用一个歌词位置。", option),
       settingRow("LRC 文件", "根据时间戳自动匹配原歌词。", lrcButton),
       settingRow("LyricLayer JSON", "导入之前导出的完整翻译备份。", jsonButton),
       sectionTitle("编辑与管理"),
-      settingRow("逐行编辑", "对照当前原歌词填写或批量粘贴中文翻译。", editButton),
+      settingRow("逐行编辑", "编辑译文、对齐与动画。", editButton),
       settingRow("导出歌词", "导出原文或翻译，用于制作翻译和歌词投稿。", lyricsExportButton),
       settingRow("导出备份", "将当前歌曲翻译导出为可再次导入的 JSON。", exportButton),
       settingRow("删除本地翻译", "只删除当前歌曲保存在此设备上的翻译。", deleteButton, "danger"),
@@ -260,8 +283,17 @@ export class TranslationUi {
           }
           const previous = await this.dependencies.store.get(targetTrack.uri);
           const imported = parsed.entry
-            ? { ...parsed.entry, trackUri: targetTrack.uri, updatedAt: Date.now() }
-            : entryFrom(targetTrack, targetTrack.uri === track.uri ? canonicalize(parsed.lines, lyrics) : parsed.lines, previous);
+            ? { ...parsed.entry, lines: parsed.lines, trackUri: targetTrack.uri, updatedAt: Date.now() }
+            : entryFrom(targetTrack, targetTrack.uri === track.uri ? canonicalize(parsed.lines, lyrics, true) : parsed.lines, previous);
+          if (targetTrack.uri === track.uri) {
+            const matches = matchTranslations(lyrics, imported.lines);
+            for (const lyric of lyrics) {
+              const line = matches.get(lyric.index);
+              if (!line?.alignment?.some(part => part.startTime !== undefined || part.endTime !== undefined) && !line?.motion) continue;
+              const error = validateVisualTranslation(lyric, line!);
+              if (error) throw new Error(`第 ${lyric.index + 1} 行：${error}`);
+            }
+          }
           await this.dependencies.store.save(imported);
           await this.dependencies.onEntryChanged(targetTrack.uri);
           notify(`已导入 ${imported.lines.length} 行 JSON 翻译`);
@@ -374,7 +406,7 @@ export class TranslationUi {
       this.dependencies.getLyrics(),
       this.dependencies.store.get(track.uri),
     ]);
-    const editorLines = lyrics.length
+    const editorLines: TranslationLine[] = lyrics.length
       ? canonicalize(existing?.lines ?? [], lyrics)
       : (existing?.lines ?? []).map((line, index) => ({ ...line, index: line.index ?? index }));
     if (!editorLines.length) {
@@ -400,6 +432,7 @@ export class TranslationUi {
     head.innerHTML = "<span>#</span><span>原歌词（只读）</span><span>中文翻译</span>";
     root.appendChild(head);
     const inputs: HTMLTextAreaElement[] = [];
+    const visuallyEdited = new Set<number>();
     editorLines.forEach((line, position) => {
       const row = document.createElement("div");
       row.className = "lyric-layer-editor-row";
@@ -433,7 +466,41 @@ export class TranslationUi {
         updateProgress();
       });
       inputs.push(input);
-      row.append(index, original, input);
+      const translationCell = document.createElement("div");
+      translationCell.className = "lyric-layer-editor-translation";
+      const visual = button("可视化编辑", "quiet");
+      visual.setAttribute("aria-label", `可视化编辑第 ${position + 1} 行`);
+      visual.addEventListener("click", () => {
+        const current = editorLines[position]!;
+        const translatedText = input.value;
+        const { alignment, ...rest } = current;
+        const draft: TranslationLine = { ...rest, translatedText,
+          ...(alignment && translatedText === current.translatedText ? { alignment } : {}) };
+        const source = lyrics.find(lyric => lyric.index === current.index)
+          ?? { index: current.index ?? position, text: current.originalText ?? "", startTime: current.startTime };
+        const restoreEditor = () => {
+          // Reuse the existing form and its unsaved values, but give it a fresh
+          // modal scroller instead of inheriting the visual editor's position.
+          this.displayModal(`编辑翻译 · ${track.title}`, root);
+          inputs.forEach(resizeTextarea);
+          updateProgress();
+          visual.focus?.({ preventScroll: true });
+          row.scrollIntoView?.({ block: "center", inline: "nearest", behavior: "auto" });
+        };
+        const visualEditor = createVisualEditor({ line: source, translation: draft,
+          onApply: next => {
+            editorLines[position] = { ...next, index: current.index,
+              originalText: current.originalText, startTime: current.startTime };
+            visuallyEdited.add(position);
+            input.value = next.translatedText;
+            restoreEditor();
+          }, onClose: restoreEditor });
+        // Spicy's transition retains the old scrollTop (and can mount content
+        // asynchronously). A fresh modal always opens this new view at the top.
+        this.displayModal(`可视化编辑 · 第 ${position + 1} 行`, visualEditor);
+      });
+      translationCell.append(input, visual);
+      row.append(index, original, translationCell);
       root.appendChild(row);
     });
 
@@ -453,7 +520,20 @@ export class TranslationUi {
       if (saving) return;
       saving = true;
       try {
-        const lines = editorLines.map((line, position) => ({ ...line, translatedText: inputs[position]?.value.trim() ?? "" }));
+        const lines = editorLines.map((line, position) => {
+          const translatedText = inputs[position]?.value ?? "";
+          const { alignment, ...rest } = line;
+          // Phrase offsets are only valid for the exact source and translation.
+          // canonicalize already discarded alignment if the source changed.
+          return { ...rest, translatedText, ...(alignment && translatedText === line.translatedText ? { alignment } : {}) };
+        });
+        for (const [position, line] of lines.entries()) {
+          if (!visuallyEdited.has(position)) continue;
+          const source = lyrics.find(lyric => lyric.index === line.index);
+          if (!source || (!line.alignment && !line.motion)) continue;
+          const error = validateVisualTranslation(source, line);
+          if (error) throw new Error(`第 ${(line.index ?? 0) + 1} 行：${error}`);
+        }
         await this.dependencies.store.save(entryFrom(track, lines, existing));
         await this.dependencies.onEntryChanged(track.uri);
         this.hideModal();

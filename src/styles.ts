@@ -1,27 +1,121 @@
+import { VISUAL_EDITOR_STYLES } from "./visual-editor-styles";
+
 export const STYLES = `
 .lyric-layer-translation {
   display: block;
   width: 100%;
+  flex-basis: 100%;
+  min-width: 0;
   box-sizing: border-box;
   margin-top: 0.22em;
   font-size: 0.74em;
-  font-weight: 450;
+  font-family: inherit;
+  font-weight: inherit;
+  font-style: inherit;
   line-height: 1.35;
   letter-spacing: 0;
-  opacity: 0.72;
-  color: currentColor !important;
-  -webkit-text-fill-color: currentColor !important;
+  opacity: 1;
+  color: inherit !important;
+  -webkit-text-fill-color: inherit !important;
   background: none !important;
-  text-shadow: none !important;
+  text-shadow: inherit !important;
+  overflow-wrap: anywhere;
   pointer-events: none !important;
   user-select: text;
   direction: ltr;
   transform: none !important;
   scale: 1 !important;
   filter: none !important;
-  transition: opacity 180ms ease;
 }
-#SpicyLyricsPage .line.Active > .lyric-layer-translation { opacity: 0.86; }
+/* Line/static lyrics are painted by the parent line's clipped background and
+   inherited shadow. Keeping that paint also follows its live gradient variables. */
+/* Syllable lyrics paint the words themselves, so use their palette rather than
+   the line's different dim alpha. Without timing, highlight the whole active line. */
+#SpicyLyricsPage .line > .lyric-layer-translation[data-lyric-layer-paint="syllable"] {
+  -webkit-text-fill-color: transparent !important;
+  text-shadow: 0 0 var(--BlurAmount, 0px)
+    rgba(var(--lyric-layer-gradient-color), var(--lyric-layer-gradient-color), var(--lyric-layer-gradient-color), var(--lyric-layer-gradient-alpha-end)) !important;
+}
+#SpicyLyricsPage .line.Sung > .lyric-layer-translation[data-lyric-layer-paint="syllable"] {
+  text-shadow: 0 0 var(--BlurAmount, 0px)
+    rgba(var(--lyric-layer-gradient-color), var(--lyric-layer-gradient-color), var(--lyric-layer-gradient-color), var(--lyric-layer-gradient-alpha)) !important;
+}
+#SpicyLyricsPage .line.Active > .lyric-layer-translation[data-lyric-layer-paint="syllable"] {
+  background-image: linear-gradient(
+    rgba(255, 255, 255, var(--lyric-layer-gradient-alpha)),
+    rgba(255, 255, 255, var(--lyric-layer-gradient-alpha))
+  ) !important;
+  background-clip: text !important;
+  -webkit-background-clip: text !important;
+  text-shadow: none !important;
+}
+#SpicyLyricsPage .line > .lyric-layer-translation[data-lyric-layer-paint="solid"] {
+  color: var(--lyric-layer-source-color) !important;
+  -webkit-text-fill-color: var(--lyric-layer-source-fill) !important;
+  text-shadow: var(--lyric-layer-source-shadow) !important;
+}
+.lyric-layer-segment {
+  display: inline-block;
+  max-width: 100%;
+  white-space: pre-wrap;
+  vertical-align: baseline;
+  -webkit-text-fill-color: inherit;
+  text-shadow: inherit;
+}
+#SpicyLyricsPage .line.Active > .lyric-layer-translation[data-lyric-layer-animated="true"] {
+  background: none !important;
+  text-shadow: none !important;
+}
+#SpicyLyricsPage .line.Active > .lyric-layer-translation[data-lyric-layer-animated="true"] > .lyric-layer-segment:not([data-lyric-layer-native]) {
+  -webkit-text-fill-color: transparent;
+  background-image: linear-gradient(90deg,
+    rgba(255, 255, 255, var(--lyric-layer-gradient-alpha)) calc(var(--lyric-layer-sweep, -10%) - 8%),
+    rgba(255, 255, 255, var(--lyric-layer-gradient-alpha-end)) calc(var(--lyric-layer-sweep, -10%) + 8%));
+  background-clip: text;
+  -webkit-background-clip: text;
+  transform: translateY(calc(var(--lyric-layer-lift, 0) * -0.055em));
+  text-shadow: 0 0 0.3em rgba(255, 255, 255, calc(var(--lyric-layer-lift, 0) * 0.12));
+}
+.lyric-layer-motion-group, .lyric-layer-motion-ink {
+  display: inline-block;
+  max-width: 100%;
+  white-space: pre-wrap;
+  vertical-align: baseline;
+}
+/* Keep a small stable breathing space. Actual animation amplitude is computed
+   from the available gaps, including whitespace and neighbouring wrapped rows. */
+.lyric-layer-segment[data-lyric-layer-native] {
+  display: inline-grid;
+  vertical-align: baseline;
+}
+.lyric-layer-segment[data-lyric-layer-native]::before {
+  content: attr(data-lyric-layer-reserve);
+  grid-area: 1 / 1;
+  font-size: 1.05em;
+  visibility: hidden;
+  white-space: inherit;
+}
+.lyric-layer-segment[data-lyric-layer-native] > .lyric-layer-motion-ink {
+  grid-area: 1 / 1;
+  justify-self: center;
+  align-self: center;
+}
+#SpicyLyricsPage .line .lyric-layer-segment[data-lyric-layer-native],
+#SpicyLyricsPage .line .lyric-layer-motion-group {
+  background: none !important;
+  text-shadow: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  #SpicyLyricsPage .line .lyric-layer-segment,
+  #SpicyLyricsPage .line .lyric-layer-motion-group,
+  #SpicyLyricsPage .line .lyric-layer-motion-ink {
+    transform: none !important;
+    scale: none !important;
+    translate: none !important;
+    rotate: none !important;
+    text-shadow: none !important;
+  }
+}
 #SpicyLyricsPage .line.OppositeAligned > .lyric-layer-translation { text-align: end; }
 #SpicyLyricsPage .line.rtl > .lyric-layer-translation { direction: ltr !important; }
 
@@ -30,7 +124,7 @@ export const STYLES = `
 sl-generic-modal.SpicyLyricsModal .sl-modal.slmodal-lyricLayer .sl-modal-container-large {
   width: min(720px, calc(100vw - 48px));
 }
-sl-generic-modal.SpicyLyricsModal .sl-modal.slmodal-lyricLayer:has(.lyric-layer-editor) .sl-modal-container-large {
+sl-generic-modal.SpicyLyricsModal .sl-modal.slmodal-lyricLayer:has(.lyric-layer-editor, .lyric-layer-visual-editor) .sl-modal-container-large {
   width: min(920px, calc(100vw - 48px));
 }
 
@@ -285,6 +379,8 @@ sl-generic-modal.SpicyLyricsModal .sl-modal.slmodal-lyricLayer:has(.lyric-layer-
   transition: background var(--dur-fast, .15s) ease, box-shadow var(--dur-fast, .15s) ease;
 }
 .lyric-layer-input::placeholder { color: var(--color-text-tertiary, rgba(255,255,255,.35)); }
+.lyric-layer-editor-translation { min-width: 0; }
+.lyric-layer-editor-translation > .lyric-layer-button { margin-top: 4px; padding: 5px 8px; font-size: 12px; }
 .lyric-layer-input:hover { background: rgba(255,255,255,.09); }
 .lyric-layer-input:focus {
   outline: none;
@@ -322,9 +418,9 @@ sl-generic-modal.SpicyLyricsModal .sl-modal.slmodal-lyricLayer:has(.lyric-layer-
   .lyric-layer-setting-row { align-items: flex-start; }
   .lyric-layer-editor-head { display: none; }
   .lyric-layer-editor-row { grid-template-columns: 28px minmax(0, 1fr); }
-  .lyric-layer-input { grid-column: 2; }
+  .lyric-layer-editor-translation { grid-column: 2; }
 }
-`;
+` + VISUAL_EDITOR_STYLES;
 
 export function injectStyles(): void {
   if (document.getElementById("lyric-layer-styles")) return;

@@ -1,4 +1,4 @@
-import type { LyricLine } from "./types";
+import type { LyricLine, LyricSyllable } from "./types";
 
 const CACHE_NAMES = ["SpicyLyrics_LyricsStore_g1", "SpicyLyrics_LyricsStore"];
 const ZERO_WIDTH_CHARACTERS = /[\u200B-\u200D\u2060\uFEFF]/g;
@@ -68,6 +68,30 @@ function syllablesToText(syllables: RawSyllable[]): string {
   return text.trim();
 }
 
+function timedSyllables(syllables: RawSyllable[] | undefined): LyricSyllable[] | undefined {
+  if (!syllables?.length) return undefined;
+  const output: LyricSyllable[] = [];
+  for (const syllable of syllables) {
+    const startTime = secondsToMs(syllable.StartTime);
+    const endTime = secondsToMs(syllable.EndTime);
+    const previous = output[output.length - 1];
+    // Keep source indices stable for phrase alignment. A broken timestamp makes
+    // the whole group unsuitable; never silently filter out a single syllable.
+    if (startTime === undefined || endTime === undefined
+      || !Number.isFinite(startTime) || !Number.isFinite(endTime)
+      || startTime < 0 || endTime <= startTime
+      || (previous && startTime < previous.endTime)) return undefined;
+    const timed: LyricSyllable = {
+      text: (syllable.Text ?? "").replace(ZERO_WIDTH_CHARACTERS, ""),
+      startTime,
+      endTime,
+    };
+    if (typeof syllable.IsPartOfWord === "boolean") timed.isPartOfWord = syllable.IsPartOfWord;
+    output.push(timed);
+  }
+  return output;
+}
+
 export function extractLyricLines(raw: RawLyrics): LyricLine[] {
   if (raw.Type === "Static" || (raw.Lines && !raw.Content)) {
     return (raw.Lines ?? []).map((line, index) => ({ index, text: (line.Text ?? "").trim() }));
@@ -81,12 +105,15 @@ export function extractLyricLines(raw: RawLyrics): LyricLine[] {
       ? syllablesToText(syllables)
       : String(item.Text ?? item.Lead?.Text ?? "").replace(ZERO_WIDTH_CHARACTERS, "").trim();
     if (!text) continue;
-    output.push({
+    const timed = timedSyllables(syllables);
+    const line: LyricLine = {
       index: output.length,
       text,
-      startTime: secondsToMs(item.Lead?.StartTime ?? item.StartTime),
-      endTime: secondsToMs(item.Lead?.EndTime ?? item.EndTime),
-    });
+      startTime: secondsToMs(item.Lead?.StartTime ?? item.StartTime) ?? timed?.[0]?.startTime,
+      endTime: secondsToMs(item.Lead?.EndTime ?? item.EndTime) ?? timed?.[timed.length - 1]?.endTime,
+    };
+    if (timed) line.syllables = timed;
+    output.push(line);
   }
   return output;
 }
@@ -114,11 +141,24 @@ function textWithoutInjectedTranslation(element: Element): string {
   const copy = element.cloneNode(true) as Element;
   copy.querySelectorAll("[data-lyric-layer-translation], .slt-interleaved-translation, .slt-romanization-line, .slt-original-line, .slt-replace-line")
     .forEach((node) => node.remove());
-  const words = copy.querySelectorAll(".word:not(.dot), .letterGroup");
+  const wordSelector = ".word:not(.dot), .letterGroup";
+  // A letterGroup already contains all of its emphasized letters. Only read
+  // outermost syllables so nested word markup cannot duplicate their text.
+  const words = Array.from(copy.querySelectorAll(wordSelector))
+    .filter((word) => !word.parentElement?.closest(wordSelector));
+  let text = "";
   if (words.length) {
-    return Array.from(words).map((word) => word.textContent?.trim() ?? "").filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+    words.forEach((word, index) => {
+      // Spicy Lyrics marks the preceding syllable when the next one belongs
+      // to the same word, including syllables wrapped in a word-group.
+      const previous = words[index - 1];
+      if (previous && !previous.classList.contains("PartOfWord")) text += " ";
+      text += word.textContent ?? "";
+    });
+  } else {
+    text = copy.textContent ?? "";
   }
-  return copy.textContent?.replace(/\s+/g, " ").trim() ?? "";
+  return text.replace(ZERO_WIDTH_CHARACTERS, "").replace(/\s+/g, " ").trim();
 }
 
 export function readMountedFallbackLines(root: ParentNode = document): LyricLine[] {

@@ -42,6 +42,8 @@ class LyricLayerApp {
   private lyrics: LyricLine[] = [];
   private sourceResolved = false;
   private loadGeneration = 0;
+  private trackUri?: string;
+  private trackLoad?: Promise<void>;
   private sourceLoad?: Promise<LyricLine[]>;
   private interfaceScheduled = false;
   private readonly songChange = () => void this.loadCurrentTrack();
@@ -50,30 +52,43 @@ class LyricLayerApp {
     injectStyles();
     this.renderer.start(() => {
       this.insertButtons();
-      if (!this.sourceResolved) void this.ensureLyrics(false);
+      // Player.data can arrive after the initial songchange event. Reconcile the
+      // track even when its lyrics cache has already been resolved.
+      void this.ensureLyrics(false);
     });
     window.Spicetify?.Player?.addEventListener?.("songchange", this.songChange);
     await this.loadCurrentTrack();
     this.insertButtons();
   }
 
-  private async loadCurrentTrack(): Promise<void> {
+  private loadCurrentTrack(): Promise<void> {
+    const track = currentTrack();
+    if (this.trackUri === track?.uri && this.trackLoad) return this.trackLoad;
     const generation = ++this.loadGeneration;
+    this.trackUri = track?.uri;
     this.entry = undefined;
     this.lyrics = [];
     this.sourceResolved = false;
     this.sourceLoad = undefined;
     this.renderer.clear();
-    const track = currentTrack();
-    if (!track) return;
-    const entry = await this.store.get(track.uri);
-    if (generation !== this.loadGeneration || currentTrack()?.uri !== track.uri) return;
-    this.entry = entry;
-    const cached = await readSpicyLyricsLines(track.uri);
-    if (generation !== this.loadGeneration || currentTrack()?.uri !== track.uri) return;
-    this.sourceResolved = cached.length > 0;
-    this.lyrics = cached.length ? cached : this.linesFromEntry(entry);
-    this.render();
+    if (!track) {
+      this.trackLoad = undefined;
+      return Promise.resolve();
+    }
+    const loading = (async () => {
+      const entry = await this.store.get(track.uri);
+      if (generation !== this.loadGeneration || currentTrack()?.uri !== track.uri) return;
+      this.entry = entry;
+      const cached = await readSpicyLyricsLines(track.uri);
+      if (generation !== this.loadGeneration || currentTrack()?.uri !== track.uri) return;
+      this.sourceResolved = cached.length > 0;
+      this.lyrics = cached.length ? cached : this.linesFromEntry(entry);
+      this.render();
+    })().finally(() => {
+      if (this.trackLoad === loading) this.trackLoad = undefined;
+    });
+    this.trackLoad = loading;
+    return loading;
   }
 
   private linesFromEntry(entry?: TranslationEntry): LyricLine[] {
@@ -88,11 +103,13 @@ class LyricLayerApp {
 
   private async ensureLyrics(allowFallback: boolean): Promise<LyricLine[]> {
     const track = currentTrack();
-    if (!track) return [];
+    if (this.trackUri !== track?.uri) await this.loadCurrentTrack();
+    else if (this.trackLoad) await this.trackLoad;
+    if (!track || this.trackUri !== track.uri || currentTrack()?.uri !== track.uri) return [];
     if (this.sourceResolved) return this.lyrics;
     if (this.sourceLoad) return this.sourceLoad;
     const generation = this.loadGeneration;
-    this.sourceLoad = (async () => {
+    const loading = (async () => {
       const cached = await readSpicyLyricsLines(track.uri);
       if (generation !== this.loadGeneration || currentTrack()?.uri !== track.uri) return [];
       const fallback = allowFallback ? readMountedFallbackLines() : [];
@@ -103,8 +120,11 @@ class LyricLayerApp {
         this.render();
       }
       return next;
-    })().finally(() => { this.sourceLoad = undefined; });
-    return this.sourceLoad;
+    })().finally(() => {
+      if (this.sourceLoad === loading) this.sourceLoad = undefined;
+    });
+    this.sourceLoad = loading;
+    return loading;
   }
 
   private render(): void {
@@ -114,7 +134,11 @@ class LyricLayerApp {
 
   private async reloadEntry(trackUri: string): Promise<void> {
     if (currentTrack()?.uri !== trackUri) return;
-    this.entry = await this.store.get(trackUri);
+    await this.ensureLyrics(false);
+    const generation = this.loadGeneration;
+    const entry = await this.store.get(trackUri);
+    if (generation !== this.loadGeneration || currentTrack()?.uri !== trackUri || this.trackUri !== trackUri) return;
+    this.entry = entry;
     if (!this.lyrics.length) this.lyrics = this.linesFromEntry(this.entry);
     this.render();
   }
