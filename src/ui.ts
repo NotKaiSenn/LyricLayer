@@ -3,7 +3,7 @@ import { exportLyrics, type LyricExportMode } from "./lyric-export";
 import { parseJson, parseLrc, parseTxt } from "./parsers";
 import type { TranslationStore } from "./storage";
 import { isTranslationAnimationEnabled, setTranslationAnimationEnabled } from "./translation-settings";
-import { createVisualEditor } from "./visual-editor";
+import { createLinePanel, type LinePanel } from "./line-panel";
 import { validateVisualTranslation } from "./translation-timing";
 import type { LyricLine, TrackInfo, TranslationEntry, TranslationLine } from "./types";
 
@@ -13,6 +13,8 @@ interface UiDependencies {
   getLyrics: () => Promise<LyricLine[]>;
   getExportLyrics: (trackUri: string) => Promise<LyricLine[]>;
   onEntryChanged: (trackUri: string) => Promise<void>;
+  /** Show unsaved lines on the lyrics page, or undefined to show the saved ones. */
+  onPreview?: (trackUri: string, lines: TranslationLine[] | undefined) => void;
 }
 
 interface SpicyModalElement extends HTMLElement {
@@ -296,6 +298,7 @@ function switchControl(label: string, checked: boolean, onChange: (checked: bool
 export class TranslationUi {
   private modal?: SpicyModalElement;
   private drafts = new Map<string, Draft>();
+  private panel?: LinePanel;
 
   constructor(private dependencies: UiDependencies) {}
 
@@ -317,6 +320,11 @@ export class TranslationUi {
     const popup = window.Spicetify?.PopupModal;
     if (!popup) throw new Error("弹窗组件尚未就绪");
     popup.display({ title, content, isLarge: true });
+  }
+
+  private hideModal(): void {
+    if (this.modal?.isConnected) this.modal.hide();
+    else window.Spicetify?.PopupModal?.hide?.();
   }
 
   /** The translation editor is the home view: a song's translation is the
@@ -426,6 +434,16 @@ export class TranslationUi {
       rows[position]?.scrollIntoView?.({ block: "nearest" });
     };
 
+    const restoreEditor = (position: number) => {
+      // Reuse the existing form and its unsaved values in a fresh modal.
+      this.displayModal(MODAL_TITLE, root);
+      inputs.forEach(resizeTextarea);
+      changed();
+      tuneButtons[position]?.focus?.({ preventScroll: true });
+      rows[position]?.scrollIntoView?.({ block: "center", inline: "nearest", behavior: "auto" });
+    };
+
+    /** Edit one line in the panel under the real lyrics, which show the draft live. */
     const openVisualEditor = (position: number) => {
       const current = editorLines[position]!;
       const input = inputs[position]!;
@@ -435,26 +453,35 @@ export class TranslationUi {
         ...(alignment && translatedText === current.translatedText ? { alignment } : {}) };
       const source = lyrics.find((lyric) => lyric.index === current.index)
         ?? { index: current.index ?? position, text: current.originalText ?? "", startTime: current.startTime };
-      const restoreEditor = () => {
-        // Reuse the existing form and its unsaved values, but give it a fresh
-        // modal scroller instead of inheriting the visual editor's position.
-        this.displayModal(MODAL_TITLE, root);
-        inputs.forEach(resizeTextarea);
-        changed();
-        tuneButtons[position]?.focus?.({ preventScroll: true });
-        rows[position]?.scrollIntoView?.({ block: "center", inline: "nearest", behavior: "auto" });
+      const bind = (next: TranslationLine): TranslationLine => ({ ...next, index: current.index,
+        originalText: current.originalText, startTime: current.startTime });
+      const apply = (next: TranslationLine) => {
+        editorLines[position] = bind(next);
+        visuallyEdited.add(position);
+        input.value = next.translatedText;
       };
-      const visualEditor = createVisualEditor({ line: source, translation: draft,
-        onApply: (next) => {
-          editorLines[position] = { ...next, index: current.index,
-            originalText: current.originalText, startTime: current.startTime };
-          visuallyEdited.add(position);
-          input.value = next.translatedText;
-          restoreEditor();
-        }, onClose: restoreEditor });
-      // Spicy's transition retains the old scrollTop (and can mount content
-      // asynchronously). A fresh modal always opens this new view at the top.
-      this.displayModal(`第 ${position + 1} 行 · 对齐与动画`, visualEditor);
+      const finish = () => {
+        this.panel?.close();
+        this.dependencies.onPreview?.(track.uri, undefined);
+        restoreEditor(position);
+      };
+      this.hideModal();
+      this.panel ??= createLinePanel();
+      this.panel.open({ line: source, translation: draft, title: `第 ${position + 1} 行`,
+        canNavigate: { previous: position > 0, next: position < editorLines.length - 1 },
+        onChange: (next) => {
+          const lines = buildLines();
+          lines[position] = bind(next);
+          this.dependencies.onPreview?.(track.uri, lines);
+        },
+        onApply: (next) => { apply(next); finish(); },
+        onClose: finish,
+        onNavigate: (delta, next) => {
+          apply(next);
+          changed();
+          openVisualEditor(position + delta);
+        },
+      });
     };
 
     const renderRows = (values?: string[]) => {

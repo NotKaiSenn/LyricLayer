@@ -17,6 +17,9 @@ export class TranslationRenderer {
   private readonly animationSettingChanged = () => { this.clearDom(); this.schedule(); };
   private lyricLines: LyricLine[] = [];
   private translations = new Map<number, TranslationLine>();
+  // What each mounted element was built from, so a changed draft remounts
+  // only the lines it touched instead of clearing the whole page.
+  private builtFrom = new WeakMap<HTMLElement, string>();
   private onLyricsUiChanged?: () => void;
 
   start(onLyricsUiChanged: () => void): void {
@@ -45,10 +48,11 @@ export class TranslationRenderer {
     this.clearDom();
   }
 
-  update(lyricLines: LyricLine[], translations: Map<number, TranslationLine>): void {
+  /** keepDom repaints in place: live editing previews call this on every change. */
+  update(lyricLines: LyricLine[], translations: Map<number, TranslationLine>, keepDom = false): void {
     this.lyricLines = lyricLines;
     this.translations = translations;
-    this.clearDom();
+    if (!keepDom) this.clearDom();
     this.schedule();
   }
 
@@ -127,9 +131,12 @@ export class TranslationRenderer {
         const element = existing ?? document.createElement("div");
         element.className = "lyric-layer-translation";
         element.dataset.lyricLayerTranslation = "true";
-        if (element.dataset.lineIndex !== String(index) || element.textContent !== translation.translatedText) {
+        const source = JSON.stringify(translation);
+        if (element.dataset.lineIndex !== String(index) || element.textContent !== translation.translatedText
+          || this.builtFrom.get(element) !== source) {
           this.animator.remove(element);
           element.textContent = translation.translatedText;
+          this.builtFrom.set(element, source);
         }
         element.dataset.lineIndex = String(index);
         this.syncSyllablePalette(line, element);

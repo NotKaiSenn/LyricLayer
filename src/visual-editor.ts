@@ -1,14 +1,26 @@
 import { formatSegments, MOTION_DEFAULTS, MOTION_PRESETS, motionPresetId, moveEdgeTime, nearestBoundary,
   parseSegments, partTimes, remapSegments, snapEdge, type EditContext } from "./alignment-edit";
 import { buildTranslationTiming, validateVisualTranslation } from "./translation-timing";
-import { createVisualPreview } from "./visual-preview";
 import type { LyricLine, TranslationAlignment, TranslationLine, TranslationMotionSettings } from "./types";
 
-interface VisualEditorOptions {
+export interface VisualEditorOptions {
   line: LyricLine;
   translation: TranslationLine;
+  title: string;
   onApply: (draft: TranslationLine) => void;
   onClose: () => void;
+  /** Every valid change, so the real lyrics page can show the draft live. */
+  onChange?: (draft: TranslationLine) => void;
+  onNavigate?: (delta: -1 | 1, draft: TranslationLine) => void;
+  canNavigate?: { previous: boolean; next: boolean };
+  onAudition?: () => void;
+}
+
+export interface VisualEditor {
+  element: HTMLElement;
+  /** The playback position on this line's timeline, or undefined to hide it. */
+  setPlayhead(time: number | undefined): void;
+  setAuditioning(active: boolean): void;
 }
 
 const COLORS = ["#a5a0ff", "#65d8c2", "#ffc780", "#ef9fc8", "#83c7ff", "#d1dc88"];
@@ -79,7 +91,8 @@ const MOTION_SLIDERS = [
     format: (value: number) => `${Math.round(value)} ms` },
 ] as const;
 
-export function createVisualEditor({ line, translation, onApply, onClose }: VisualEditorOptions): HTMLElement {
+export function createVisualEditor({ line, translation, title, onApply, onClose, onChange, onNavigate, canNavigate,
+  onAudition }: VisualEditorOptions): VisualEditor {
   const draft = clone(translation);
   const source = line.syllables ?? [];
   // Use the same normalized syllable endpoints as playback (providers can
@@ -116,8 +129,25 @@ export function createVisualEditor({ line, translation, onApply, onClose }: Visu
   };
 
   const root = node("div", "ll-scope lyric-layer-visual-editor");
-  const preview = createVisualPreview({ line, translation: clone(draft) });
-  preview.element.classList.add("ll-ve-preview");
+  const header = node("div", "ll-ve-header");
+  const heading = node("div", "ll-ve-heading");
+  heading.append(node("span", "ll-ve-heading-title", title), node("span", "ll-ve-heading-line", line.text));
+  const previous = button("‹ 上一句", "ll-btn small", () => navigate(-1));
+  const next = button("下一句 ›", "ll-btn small", () => navigate(1));
+  const listen = button("▶ 试听这一句", "ll-btn small", () => onAudition?.());
+  listen.title = "从这一句开头前一点开始播放，唱完自动暂停";
+  const cancel = button("取消", "ll-btn small", () => finish(false));
+  cancel.title = "Esc";
+  const done = button("完成", "ll-btn small primary", () => finish(true));
+  done.title = "Ctrl/Cmd + Enter";
+  const headerActions = node("div", "ll-ve-header-actions");
+  if (onNavigate) headerActions.append(previous, next);
+  if (onAudition) headerActions.append(listen);
+  headerActions.append(cancel, done);
+  header.append(heading, headerActions);
+  const status = node("p", "ll-ve-status");
+  status.setAttribute("role", "status");
+  status.setAttribute("aria-live", "polite");
 
   // Translation text. With word timing, "/" marks where one phrase ends.
   const textSection = node("section", "ll-ve-section");
@@ -183,6 +213,9 @@ export function createVisualEditor({ line, translation, onApply, onClose }: Visu
     return block;
   });
 
+  const playheads = [node("div", "ll-ve-playhead"), node("div", "ll-ve-playhead")];
+  playheads.forEach(playhead => { playhead.hidden = true; });
+  sourceTrack.append(playheads[0]!);
   type Bar = { root: HTMLElement; label: HTMLElement; start: HTMLButtonElement; end: HTMLButtonElement };
   type PreciseRow = { label: HTMLElement; span: HTMLElement; start: HTMLInputElement; end: HTMLInputElement; follow: HTMLButtonElement };
   let bars: Bar[] = [];
@@ -289,6 +322,7 @@ export function createVisualEditor({ line, translation, onApply, onClose }: Visu
         targetTrack.append(bar);
         return { root: bar, label, start, end };
       });
+      targetTrack.append(playheads[1]!);
     }
     const rows = draft.alignment?.length ?? 0;
     if (preciseInputs.length !== rows) {
@@ -381,22 +415,21 @@ export function createVisualEditor({ line, translation, onApply, onClose }: Visu
   });
   motionSection.append(motionHead, tuning);
 
-  const footer = node("div", "ll-footer");
-  const status = node("p", "ll-footer-status");
-  status.setAttribute("role", "status");
-  status.setAttribute("aria-live", "polite");
-  const cancel = button("取消", "ll-btn", () => finish(false));
-  const done = button("完成", "ll-btn primary", () => finish(true));
-  done.title = "Ctrl/Cmd + Enter";
-  footer.append(status, cancel, done);
-  root.append(preview.element, textSection, alignSection, motionSection, footer);
+  const body = node("div", "ll-ve-body");
+  body.append(textSection, alignSection, motionSection);
+  root.append(header, status, body);
 
+  const currentError = (): string | undefined => segmentError ?? validateVisualTranslation(line, draft);
   function finish(apply: boolean): void {
-    if (closed || (apply && (segmentError || validateVisualTranslation(line, draft)))) return;
+    if (closed || (apply && currentError())) return;
     closed = true;
-    preview.destroy();
     if (apply) onApply(clone(draft));
     else onClose();
+  }
+  function navigate(delta: -1 | 1): void {
+    if (closed || currentError()) return;
+    closed = true;
+    onNavigate?.(delta, clone(draft));
   }
 
   function refresh(): void {
@@ -418,12 +451,15 @@ export function createVisualEditor({ line, translation, onApply, onClose }: Visu
       output.textContent = setting.format(Number(input.value));
     }
 
-    const error = segmentError ?? validateVisualTranslation(line, draft);
+    const error = currentError();
     done.disabled = !!error;
-    status.textContent = error ?? "完成后回到列表，保存时一并生效";
+    previous.disabled = !!error || !canNavigate?.previous;
+    next.disabled = !!error || !canNavigate?.next;
+    listen.disabled = !context && !(Number.isFinite(line.startTime) && Number.isFinite(line.endTime));
+    status.textContent = error ?? "上方歌词按草稿实时显示 · 完成后回到列表保存";
     status.dataset.error = String(!!error);
     textInput.setAttribute("aria-invalid", String(!!segmentError));
-    if (!error && !closed) preview.update(clone(draft));
+    if (!error && !closed) onChange?.(clone(draft));
   }
 
   textInput.addEventListener("input", () => {
@@ -448,5 +484,18 @@ export function createVisualEditor({ line, translation, onApply, onClose }: Visu
     }
   });
   refresh();
-  return root;
+  return {
+    element: root,
+    setPlayhead(time) {
+      const visible = !!context && time !== undefined && time >= context.lineStart && time <= context.lineEnd;
+      playheads.forEach(playhead => {
+        playhead.hidden = !visible;
+        if (visible) playhead.style.left = `${position(time!)}%`;
+      });
+    },
+    setAuditioning(active) {
+      listen.textContent = active ? "■ 停止试听" : "▶ 试听这一句";
+      listen.setAttribute("aria-pressed", String(active));
+    },
+  };
 }

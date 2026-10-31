@@ -173,3 +173,42 @@ test("当前歌曲JSON手动时间超出真实行边界时拒绝导入，原保�
     assert.equal(unchanged.updatedAt, 1);
   }
 });
+
+test("逐句面板：弹窗收起，草稿连同其他未保存行实时显示在歌词页，结束后恢复已保存显示", async () => {
+  const run = createUiHarness({ entry: stored([aligned(0, "One", "一"), aligned(1, "Two", "二")]),
+    lyrics: [{ index: 0, text: "One" }, { index: 1, text: "Two" }] });
+  await run.open();
+  run.type(0, "改过的一");
+  run.labelled("调整第 2 行的对齐与动画").click();
+  assert.equal(run.isOpen(), false, "the modal gives way to the real lyrics page");
+  assert.equal(run.panelOpen(), true);
+  assert.equal(run.visual().title, "第 2 行");
+  assert.deepEqual({ ...run.visual().canNavigate }, { previous: true, next: false });
+  run.visual().onChange!({ ...run.visual().translation, translatedText: "草稿二" });
+  const shown = run.previews[run.previews.length - 1]!;
+  assert.deepEqual(shown.map(line => line.translatedText), ["改过的一", "草稿二"]);
+  assert.equal(shown[1]!.originalText, "Two");
+  run.visual().onClose();
+  assert.equal(run.panelOpen(), false);
+  assert.equal(run.previews[run.previews.length - 1], undefined, "closing shows the saved translation again");
+  assert.equal(run.isOpen(), true);
+  assert.equal(run.inputs()[1]!.value, "二");
+  assert.equal(run.saved.length, 0);
+});
+
+test("逐句面板：上一句/下一句会先应用当前草稿，再打开相邻行", async () => {
+  const run = createUiHarness({ entry: stored([aligned(0, "One", "一"), aligned(1, "Two", "二")]),
+    lyrics: [{ index: 0, text: "One" }, { index: 1, text: "Two" }] });
+  await run.open();
+  run.labelled("调整第 1 行的对齐与动画").click();
+  assert.deepEqual({ ...run.visual().canNavigate }, { previous: false, next: true });
+  run.visual().onNavigate!(1, { index: 0, translatedText: "新的一", motion: { amplitude: 0 } });
+  assert.equal(run.visual().title, "第 2 行");
+  assert.equal(run.visual().translation.translatedText, "二");
+  run.visual().onApply({ index: 1, translatedText: "新的二" });
+  assert.deepEqual(run.inputs().map(input => input.value), ["新的一", "新的二"]);
+  assert.equal(run.status(), "有未保存的修改");
+  run.button("保存").click();
+  await settle();
+  assert.equal(run.saved[0]!.lines[0]!.motion?.amplitude, 0);
+});

@@ -3,7 +3,7 @@ import { matchTranslations } from "./matcher";
 import { readMountedFallbackLines, readSpicyLyricsLines } from "./spicy-lyrics-source";
 import { IndexedDbTranslationStore } from "./storage";
 import { injectStyles } from "./styles";
-import type { LyricLine, TrackInfo, TranslationEntry } from "./types";
+import type { LyricLine, TrackInfo, TranslationEntry, TranslationLine } from "./types";
 import { TranslationUi } from "./ui";
 
 const BUTTON_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none"><path d="M4 6h12M4 10h9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M5 15h5m-5 4h8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" opacity=".68"/><path d="M18 13v7m-3.5-3.5h7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`;
@@ -37,8 +37,11 @@ class LyricLayerApp {
     getLyrics: () => this.ensureLyrics(true),
     getExportLyrics: readSpicyLyricsLines,
     onEntryChanged: (trackUri) => this.reloadEntry(trackUri),
+    onPreview: (trackUri, lines) => this.preview(trackUri, lines),
   });
   private entry?: TranslationEntry;
+  /** Unsaved lines shown on the page while a line is being edited. */
+  private previewLines?: TranslationLine[];
   private lyrics: LyricLine[] = [];
   private sourceResolved = false;
   private loadGeneration = 0;
@@ -67,6 +70,7 @@ class LyricLayerApp {
     const generation = ++this.loadGeneration;
     this.trackUri = track?.uri;
     this.entry = undefined;
+    this.previewLines = undefined;
     this.lyrics = [];
     this.sourceResolved = false;
     this.sourceLoad = undefined;
@@ -127,9 +131,16 @@ class LyricLayerApp {
     return loading;
   }
 
-  private render(): void {
-    const map = this.entry ? matchTranslations(this.lyrics, this.entry.lines) : new Map();
-    this.renderer.update(this.lyrics, map);
+  private render(keepDom = false): void {
+    const lines = this.previewLines ?? this.entry?.lines;
+    const map = lines ? matchTranslations(this.lyrics, lines) : new Map();
+    this.renderer.update(this.lyrics, map, keepDom);
+  }
+
+  private preview(trackUri: string, lines: TranslationLine[] | undefined): void {
+    if (trackUri !== this.trackUri || (!lines && !this.previewLines)) return;
+    this.previewLines = lines;
+    this.render(true);
   }
 
   private async reloadEntry(trackUri: string): Promise<void> {

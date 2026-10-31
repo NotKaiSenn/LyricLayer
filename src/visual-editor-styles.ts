@@ -1,10 +1,10 @@
 export const VISUAL_EDITOR_STYLES = `
 .lyric-layer-visual-editor {
-  display: grid; gap: 22px; min-width: 0; width: 100%; box-sizing: border-box;
+  display: grid; gap: 12px; min-width: 0; width: 100%; box-sizing: border-box;
   color: var(--ll-text); font: 13px/1.5 var(--encore-body-font-stack, var(--fallback-fonts, sans-serif));
 }
 .lyric-layer-visual-editor * { box-sizing: border-box; }
-.lyric-layer-visual-editor .ll-ve-section { display: grid; gap: 10px; min-width: 0; }
+.lyric-layer-visual-editor .ll-ve-section { display: grid; gap: 8px; min-width: 0; }
 .lyric-layer-visual-editor .ll-ve-section-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-height: 28px; }
 .lyric-layer-visual-editor .ll-ve-title { color: var(--ll-text); font-size: 14px; font-weight: 600; }
 .lyric-layer-visual-editor .ll-ve-hint { margin: 0; color: var(--ll-text-2); font-size: 12px; line-height: 1.45; }
@@ -17,7 +17,7 @@ export const VISUAL_EDITOR_STYLES = `
 .lyric-layer-visual-editor .ll-ve-text {
   display: block; width: 100%; min-height: 44px; margin: 0; padding: 10px 12px; resize: none; overflow: hidden;
   border: 0; border-radius: 8px; outline: none; background: var(--ll-fill); box-shadow: inset 0 0 0 1px var(--ll-line);
-  color: var(--ll-text); font: inherit; font-size: 16px; line-height: 1.5; white-space: pre-wrap;
+  color: var(--ll-text); font: inherit; font-size: 15px; line-height: 1.5; white-space: pre-wrap;
 }
 .lyric-layer-visual-editor .ll-ve-text::placeholder { color: var(--ll-text-3); }
 .lyric-layer-visual-editor .ll-ve-text:focus { background: var(--ll-fill-strong); box-shadow: inset 0 0 0 1px var(--ll-line-strong); }
@@ -111,16 +111,36 @@ export const VISUAL_EDITOR_STYLES = `
 .lyric-layer-visual-editor .ll-ve-range:focus-visible { outline: 2px solid var(--ll-text); outline-offset: 3px; }
 .lyric-layer-visual-editor .ll-ve-slider-value { color: var(--ll-text-2); font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; }
 
-.lyric-layer-visual-editor .ll-ve-preview { padding: 12px 14px; }
-.lyric-layer-visual-editor .ll-ve-preview .ll-preview-stage { min-height: 84px; }
-/* Keep the preview in view while editing below it. Short windows and narrow
-   modals use normal flow so it can never cover the controls. */
-@media (min-width: 760px) and (min-height: 760px) {
-  .lyric-layer-visual-editor .ll-ve-preview {
-    position: sticky; top: -20px; z-index: 4; background: var(--ll-surface-solid);
-    box-shadow: 0 10px 20px -12px rgba(0,0,0,.8), inset 0 0 0 1px var(--ll-line);
-  }
-  .lyric-layer-visual-editor .ll-ve-preview .ll-preview-stage { max-height: min(200px, 24vh); overflow: auto; }
+/* The line editor lives in a panel docked under the real lyrics, which act
+   as the preview. It only exists while a line is being edited. */
+.ll-line-panel {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 60; box-sizing: border-box;
+  max-height: min(50%, 400px); overflow-y: auto; padding: 14px 28px 16px;
+  border-top: 1px solid rgba(255,255,255,.1); background: rgba(20,20,22,.94);
+  -webkit-backdrop-filter: blur(24px) saturate(1.2); backdrop-filter: blur(24px) saturate(1.2);
+  box-shadow: 0 -18px 40px rgba(0,0,0,.35); animation: ll-panel-in .22s cubic-bezier(.2,.8,.2,1);
+}
+/* Without a lyrics page (e.g. opened from a side card) it floats above the player bar. */
+.ll-line-panel.floating {
+  position: fixed; left: 0; right: 0; bottom: 96px; width: min(960px, calc(100vw - 48px)); margin: 0 auto;
+  border: 1px solid rgba(255,255,255,.1); border-radius: 14px; max-height: min(60vh, 440px);
+}
+@keyframes ll-panel-in { from { opacity: 0; translate: 0 16px; } }
+#SpicyLyricsPage.ll-panel-host { position: relative; }
+#SpicyLyricsPage .ll-editing-line { outline: 1.5px dashed rgba(255,199,128,.65); outline-offset: 10px; border-radius: 12px; }
+@media (prefers-reduced-motion: reduce) { .ll-line-panel { animation: none; } }
+
+.lyric-layer-visual-editor .ll-ve-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.lyric-layer-visual-editor .ll-ve-heading { display: flex; flex: 1; align-items: baseline; gap: 10px; min-width: 0; }
+.lyric-layer-visual-editor .ll-ve-heading-title { flex: none; font-size: 14px; font-weight: 600; }
+.lyric-layer-visual-editor .ll-ve-heading-line { overflow: hidden; color: var(--ll-text-2); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.lyric-layer-visual-editor .ll-ve-header-actions { display: flex; flex: none; flex-wrap: wrap; gap: 6px; }
+.lyric-layer-visual-editor .ll-ve-status { margin: -4px 0 0; color: var(--ll-text-3); font-size: 12px; }
+.lyric-layer-visual-editor .ll-ve-status[data-error="true"] { color: var(--ll-danger); }
+.lyric-layer-visual-editor .ll-ve-body { display: grid; gap: 14px; }
+.lyric-layer-visual-editor .ll-ve-playhead {
+  position: absolute; top: -3px; bottom: -3px; z-index: 3; width: 2px; margin-left: -1px; border-radius: 1px;
+  background: #fff; box-shadow: 0 0 6px rgba(255,255,255,.6); pointer-events: none;
 }
 @media (max-width: 680px) {
   .lyric-layer-visual-editor .ll-ve-actions { margin-left: 0; }

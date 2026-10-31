@@ -4,15 +4,15 @@ import { runInNewContext } from "node:vm";
 import { build } from "esbuild";
 import type { LyricLine, TrackInfo, TranslationEntry, TranslationLine } from "../src/types.ts";
 
-// The real ui.ts, with only the visual editor replaced so a test can drive
-// its onApply/onClose callbacks directly.
+// The real ui.ts, with only the docked line panel replaced so a test can drive
+// its onApply/onClose/onNavigate callbacks directly.
 const bundle = await build({
   entryPoints: [fileURLToPath(new URL("../src/ui.ts", import.meta.url))],
   bundle: true, write: false, format: "iife", globalName: "LyricLayerUi",
   plugins: [{ name: "visual-editor-boundary", setup(builder) {
-    builder.onResolve({ filter: /^\.\/visual-editor$/ }, () => ({ path: "visual", namespace: "fixture" }));
+    builder.onResolve({ filter: /^\.\/line-panel$/ }, () => ({ path: "panel", namespace: "fixture" }));
     builder.onLoad({ filter: /.*/, namespace: "fixture" }, () => ({
-      contents: "export const createVisualEditor = options => globalThis.__createVisualEditor(options);",
+      contents: "export const createLinePanel = () => ({ open: options => globalThis.__openLinePanel(options), close: () => globalThis.__closeLinePanel() });",
     }));
   } }],
 });
@@ -38,8 +38,12 @@ export interface FixtureEvent {
 export interface VisualOptions {
   line: LyricLine;
   translation: TranslationLine;
+  title: string;
+  canNavigate?: { previous: boolean; next: boolean };
   onApply: (draft: TranslationLine) => void;
   onClose: () => void;
+  onChange?: (draft: TranslationLine) => void;
+  onNavigate?: (delta: -1 | 1, draft: TranslationLine) => void;
 }
 
 export interface HarnessOptions {
@@ -67,6 +71,8 @@ export function createUiHarness(options: HarnessOptions = {}) {
   let root: ElementFixture | undefined;
   let modalTitle = "";
   let visualOptions: VisualOptions | undefined;
+  let panelOpen = false;
+  const previews: Array<TranslationLine[] | undefined> = [];
   let active: ElementFixture | undefined;
 
   class ElementFixture {
@@ -158,10 +164,8 @@ export function createUiHarness(options: HarnessOptions = {}) {
   const body = new ElementFixture("body");
   const context = {
     Blob, Event, console,
-    __createVisualEditor: (value: VisualOptions) => {
-      visualOptions = value;
-      return new ElementFixture("visual-editor");
-    },
+    __openLinePanel: (value: VisualOptions) => { visualOptions = value; panelOpen = true; },
+    __closeLinePanel: () => { panelOpen = false; },
     document: {
       createElement: (tag: string) => new ElementFixture(tag),
       body,
@@ -205,6 +209,10 @@ export function createUiHarness(options: HarnessOptions = {}) {
       getAll: async () => entry ? [entry] : [],
     },
     onEntryChanged: async () => {},
+    onPreview: (uri: string, lines: TranslationLine[] | undefined) => {
+      assert.equal(uri, currentTrack.uri);
+      previews.push(lines && structuredClone(lines));
+    },
   });
 
   const view = () => { assert.ok(root, "The modal is not open"); return root; };
@@ -221,7 +229,9 @@ export function createUiHarness(options: HarnessOptions = {}) {
     text: () => view().text(),
     isOpen: () => !!root,
     active: () => active,
-    visual: () => { assert.ok(visualOptions, "The visual editor was not opened"); return visualOptions; },
+    visual: () => { assert.ok(visualOptions, "The line panel was not opened"); return visualOptions; },
+    panelOpen: () => panelOpen,
+    previews,
     inputs: () => view().all().filter(node => node.tag === "textarea"),
     button: (label: string) => find(node => node.tag === "button" && node.text() === label, `button ${label}`),
     labelled: (label: string) => find(node => node.attributes.get("aria-label") === label, `control ${label}`),
