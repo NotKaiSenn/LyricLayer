@@ -44,8 +44,8 @@ export function createLinePanel(): LinePanel {
   let highlighted: HTMLElement | undefined;
   let lastHighlight = 0;
   let positioned: HTMLElement | undefined;
-  // Where the listener was before the first audition, restored on close.
-  let restore: { position: number; playing: boolean } | undefined;
+  let host: HTMLElement | undefined;
+  let resize: ResizeObserver | undefined;
   let audition: { end: number; startedAt: number; length: number } | undefined;
   const player = () => window.Spicetify?.Player;
 
@@ -56,7 +56,8 @@ export function createLinePanel(): LinePanel {
       element?.classList.add("ll-editing-line");
       highlighted = element;
     }
-    if (scroll) element?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+    // Wait for the lyrics area to shrink above the panel before centring in it.
+    if (scroll) requestAnimationFrame(() => element?.scrollIntoView?.({ block: "center", behavior: "smooth" }));
   };
 
   const stopAudition = () => {
@@ -88,7 +89,6 @@ export function createLinePanel(): LinePanel {
     const control = player();
     if (!bounds || !control?.seek) return;
     try {
-      restore ??= { position: control.getProgress?.() ?? 0, playing: control.isPlaying?.() ?? false };
       const start = Math.max(0, bounds.start - PRE_ROLL_MS);
       control.seek(start);
       control.play?.();
@@ -112,13 +112,25 @@ export function createLinePanel(): LinePanel {
       current = options;
       if (!container.isConnected) {
         const page = document.getElementById("SpicyLyricsPage");
-        const host = page ?? document.body;
+        const target = page ?? document.body;
         container.classList.toggle("floating", !page);
         if (page && getComputedStyle(page).position === "static") {
           page.classList.add("ll-panel-host");
           positioned = page;
         }
-        host.appendChild(container);
+        target.appendChild(container);
+        if (page) {
+          // Spicy centres the active line in its lyrics area. Shrinking that area
+          // to the space above the panel keeps the line being edited in view.
+          host = page;
+          page.classList.add("ll-panel-open");
+          const measure = () => page.style.setProperty("--ll-panel-height", `${container.offsetHeight}px`);
+          measure();
+          if (typeof ResizeObserver !== "undefined") {
+            resize = new ResizeObserver(measure);
+            resize.observe(container);
+          }
+        }
         document.addEventListener("keydown", onKey, true);
         frame = requestAnimationFrame(tick);
       }
@@ -129,14 +141,6 @@ export function createLinePanel(): LinePanel {
     },
     close() {
       stopAudition();
-      const control = player();
-      if (restore && control?.seek) {
-        try {
-          control.seek(restore.position);
-          if (restore.playing) control.play?.();
-        } catch { /* Leave playback where it is. */ }
-      }
-      restore = undefined;
       if (frame !== undefined) cancelAnimationFrame(frame);
       frame = undefined;
       document.removeEventListener("keydown", onKey, true);
@@ -144,6 +148,11 @@ export function createLinePanel(): LinePanel {
       highlighted = undefined;
       positioned?.classList.remove("ll-panel-host");
       positioned = undefined;
+      resize?.disconnect();
+      resize = undefined;
+      host?.classList.remove("ll-panel-open");
+      host?.style.removeProperty("--ll-panel-height");
+      host = undefined;
       container.remove();
       current = editor = undefined;
     },

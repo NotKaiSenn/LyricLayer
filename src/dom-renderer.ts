@@ -8,6 +8,24 @@ import type { LyricLine, TranslationLine } from "./types";
 const LINE_SELECTOR = ".line:not(.musical-line):not(.bg-line)";
 const TRANSLATION_SELECTOR = "[data-lyric-layer-translation]";
 
+/** While editing, empty lines get a clickable placeholder, one line can show
+ * an editor instead of its translation, and a click activates a line. */
+export interface EditHooks {
+  placeholder: string;
+  editing?: { index: number; element: HTMLElement };
+  onActivate(index: number, line: Element): void;
+  /** The editor was (re)attached, e.g. after Spicy re-created the line. */
+  onEditorMounted?(): void;
+}
+
+/** Let Spicy Lyrics handle a click on our injected text as a click on its own
+ * line. Its delegated listener only reacts to a word (or emphasis letter) of a
+ * syllable line, or to the line element of a line-synced one. */
+export function clickNativeLine(line: Element): void {
+  const target = line.querySelector(".word:not(.dot), .Emphasis") ?? line;
+  target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+}
+
 export class TranslationRenderer {
   private roots = new Map<Element, MutationObserver>();
   private pageObserver?: MutationObserver;
@@ -21,6 +39,15 @@ export class TranslationRenderer {
   // only the lines it touched instead of clearing the whole page.
   private builtFrom = new WeakMap<HTMLElement, string>();
   private onLyricsUiChanged?: () => void;
+  private editHooks?: EditHooks;
+  private readonly translationClicked = (event: Event) => {
+    const element = event.currentTarget as HTMLElement;
+    const line = element.parentElement;
+    if (!line) return;
+    const index = Number(element.dataset.lineIndex);
+    if (this.editHooks && Number.isInteger(index)) this.editHooks.onActivate(index, line);
+    else clickNativeLine(line);
+  };
 
   start(onLyricsUiChanged: () => void): void {
     this.onLyricsUiChanged = onLyricsUiChanged;
@@ -63,6 +90,20 @@ export class TranslationRenderer {
   }
 
   refresh(): void { this.schedule(); }
+
+  setEditHooks(hooks: EditHooks | undefined): void {
+    this.editHooks = hooks;
+    this.schedule();
+  }
+
+  /** Render synchronously, e.g. so a newly placed editor can take focus. */
+  renderNow(): void {
+    if (this.renderFrame !== undefined) cancelAnimationFrame(this.renderFrame);
+    this.renderFrame = undefined;
+    this.scheduled = false;
+    this.discoverRoots();
+    this.renderMountedLines();
+  }
 
   private schedule(): void {
     if (this.scheduled) return;
@@ -118,19 +159,45 @@ export class TranslationRenderer {
   }
 
   private renderMountedLines(): void {
+    const editing = this.editHooks?.editing;
     this.roots.forEach((_observer, root) => {
       root.querySelectorAll(LINE_SELECTOR).forEach((line) => {
         const index = this.resolveLineIndex(line);
-        const translation = index === undefined ? undefined : this.translations.get(index);
-        const existing = line.querySelector(`:scope > ${TRANSLATION_SELECTOR}`) as HTMLElement | null;
-        if (!translation?.translatedText.trim()) {
-          if (existing) this.animator.remove(existing);
-          existing?.remove();
+        let existing = line.querySelector(`:scope > ${TRANSLATION_SELECTOR}`) as HTMLElement | null;
+        if (editing && index === editing.index) {
+          if (existing && existing !== editing.element) {
+            this.animator.remove(existing);
+            existing.remove();
+          }
+          if (editing.element.parentElement !== line) {
+            line.appendChild(editing.element);
+            this.editHooks?.onEditorMounted?.();
+          }
           return;
         }
-        const element = existing ?? document.createElement("div");
+        // The editor moved on (or editing ended); this line renders normally again.
+        if (existing?.dataset.llEditor) {
+          existing.remove();
+          existing = null;
+        }
+        const translation = index === undefined ? undefined : this.translations.get(index);
+        if (!translation?.translatedText.trim()) {
+          if (existing) this.animator.remove(existing);
+          if (this.editHooks && index !== undefined) {
+            const placeholder = existing?.dataset.llPlaceholder ? existing : this.createTranslation();
+            if (placeholder !== existing) existing?.remove();
+            placeholder.className = "lyric-layer-translation ll-placeholder";
+            placeholder.dataset.llPlaceholder = "true";
+            placeholder.dataset.lineIndex = String(index);
+            placeholder.textContent = this.editHooks.placeholder;
+            this.builtFrom.delete(placeholder);
+            if (placeholder.parentElement !== line) line.appendChild(placeholder);
+          } else existing?.remove();
+          return;
+        }
+        const element = existing && !existing.dataset.llPlaceholder ? existing : this.createTranslation();
+        if (element !== existing) existing?.remove();
         element.className = "lyric-layer-translation";
-        element.dataset.lyricLayerTranslation = "true";
         const source = JSON.stringify(translation);
         if (element.dataset.lineIndex !== String(index) || element.textContent !== translation.translatedText
           || this.builtFrom.get(element) !== source) {
@@ -152,10 +219,17 @@ export class TranslationRenderer {
           this.animator.remove(element);
           element.textContent = translation.translatedText;
         }
-        if (!existing) line.appendChild(element);
+        if (element.parentElement !== line) line.appendChild(element);
       });
     });
     this.animator.refresh();
+  }
+
+  private createTranslation(): HTMLElement {
+    const element = document.createElement("div");
+    element.dataset.lyricLayerTranslation = "true";
+    element.addEventListener("click", this.translationClicked);
+    return element;
   }
 
   private syncSyllablePalette(line: Element, translation: HTMLElement): void {

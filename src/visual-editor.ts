@@ -2,14 +2,14 @@ import { formatSegments, MOTION_DEFAULTS, MOTION_PRESETS, motionPresetId, moveEd
   parseSegments, partTimes, remapSegments, snapEdge, type EditContext } from "./alignment-edit";
 import { buildTranslationTiming, validateVisualTranslation } from "./translation-timing";
 import type { LyricLine, TranslationAlignment, TranslationLine, TranslationMotionSettings } from "./types";
+import { ICONS, iconButton } from "./ui-kit";
 
 export interface VisualEditorOptions {
   line: LyricLine;
   translation: TranslationLine;
   title: string;
-  onApply: (draft: TranslationLine) => void;
   onClose: () => void;
-  /** Every valid change, so the real lyrics page can show the draft live. */
+  /** Every valid change. It applies at once, and the lyrics page shows it live. */
   onChange?: (draft: TranslationLine) => void;
   onNavigate?: (delta: -1 | 1, draft: TranslationLine) => void;
   canNavigate?: { previous: boolean; next: boolean };
@@ -91,7 +91,7 @@ const MOTION_SLIDERS = [
     format: (value: number) => `${Math.round(value)} ms` },
 ] as const;
 
-export function createVisualEditor({ line, translation, title, onApply, onClose, onChange, onNavigate, canNavigate,
+export function createVisualEditor({ line, translation, title, onClose, onChange, onNavigate, canNavigate,
   onAudition }: VisualEditorOptions): VisualEditor {
   const draft = clone(translation);
   const source = line.syllables ?? [];
@@ -132,18 +132,23 @@ export function createVisualEditor({ line, translation, title, onApply, onClose,
   const header = node("div", "ll-ve-header");
   const heading = node("div", "ll-ve-heading");
   heading.append(node("span", "ll-ve-heading-title", title), node("span", "ll-ve-heading-line", line.text));
-  const previous = button("‹ 上一句", "ll-btn small", () => navigate(-1));
-  const next = button("下一句 ›", "ll-btn small", () => navigate(1));
-  const listen = button("▶ 试听这一句", "ll-btn small", () => onAudition?.());
+  const previous = iconButton("上一句", ICONS.previous, "small");
+  previous.addEventListener("click", () => navigate(-1));
+  const next = iconButton("下一句", ICONS.next, "small");
+  next.addEventListener("click", () => navigate(1));
+  const listen = button("", "ll-btn small", () => onAudition?.());
   listen.title = "从这一句开头前一点开始播放，唱完自动暂停";
-  const cancel = button("取消", "ll-btn small", () => finish(false));
-  cancel.title = "Esc";
-  const done = button("完成", "ll-btn small primary", () => finish(true));
-  done.title = "Ctrl/Cmd + Enter";
+  const showListen = (active: boolean) => {
+    listen.innerHTML = `<span class="ll-btn-icon">${active ? ICONS.stop : ICONS.play}</span><span>${active ? "停止" : "试听这一句"}</span>`;
+    listen.setAttribute("aria-pressed", String(active));
+  };
+  showListen(false);
+  const collapse = button("收起", "ll-btn small", () => finish());
+  collapse.title = "Esc";
   const headerActions = node("div", "ll-ve-header-actions");
   if (onNavigate) headerActions.append(previous, next);
   if (onAudition) headerActions.append(listen);
-  headerActions.append(cancel, done);
+  headerActions.append(collapse);
   header.append(heading, headerActions);
   const status = node("p", "ll-ve-status");
   status.setAttribute("role", "status");
@@ -420,16 +425,23 @@ export function createVisualEditor({ line, translation, title, onApply, onClose,
   root.append(header, status, body);
 
   const currentError = (): string | undefined => segmentError ?? validateVisualTranslation(line, draft);
-  function finish(apply: boolean): void {
-    if (closed || (apply && currentError())) return;
+  // Leaving is final, but a failing callback must not leave every button dead.
+  const leave = (action: () => void): void => {
+    if (closed) return;
     closed = true;
-    if (apply) onApply(clone(draft));
-    else onClose();
+    try {
+      action();
+    } catch (error) {
+      closed = false;
+      throw error;
+    }
+  };
+  function finish(): void {
+    leave(onClose);
   }
   function navigate(delta: -1 | 1): void {
-    if (closed || currentError()) return;
-    closed = true;
-    onNavigate?.(delta, clone(draft));
+    if (currentError()) return;
+    leave(() => onNavigate?.(delta, clone(draft)));
   }
 
   function refresh(): void {
@@ -452,11 +464,10 @@ export function createVisualEditor({ line, translation, title, onApply, onClose,
     }
 
     const error = currentError();
-    done.disabled = !!error;
     previous.disabled = !!error || !canNavigate?.previous;
     next.disabled = !!error || !canNavigate?.next;
     listen.disabled = !context && !(Number.isFinite(line.startTime) && Number.isFinite(line.endTime));
-    status.textContent = error ?? "上方歌词按草稿实时显示 · 完成后回到列表保存";
+    status.textContent = error ?? "改动会实时显示在上方歌词里，记得在顶部保存";
     status.dataset.error = String(!!error);
     textInput.setAttribute("aria-invalid", String(!!segmentError));
     if (!error && !closed) onChange?.(clone(draft));
@@ -480,7 +491,7 @@ export function createVisualEditor({ line, translation, title, onApply, onClose,
   root.addEventListener("keydown", event => {
     if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
       event.preventDefault();
-      finish(true);
+      finish();
     }
   });
   refresh();
@@ -494,8 +505,7 @@ export function createVisualEditor({ line, translation, title, onApply, onClose,
       });
     },
     setAuditioning(active) {
-      listen.textContent = active ? "■ 停止试听" : "▶ 试听这一句";
-      listen.setAttribute("aria-pressed", String(active));
+      showListen(active);
     },
   };
 }

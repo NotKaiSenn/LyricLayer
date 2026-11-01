@@ -20,7 +20,9 @@ export const STYLES = `
   background: none !important;
   text-shadow: inherit !important;
   overflow-wrap: anywhere;
-  pointer-events: none !important;
+  /* Clickable: the renderer forwards a click to Spicy's own line seek. */
+  pointer-events: auto !important;
+  cursor: inherit;
   user-select: text;
   direction: ltr;
   transform: none !important;
@@ -121,10 +123,6 @@ export const STYLES = `
 
 .lyric-layer-control svg { width: 22px; height: 22px; display: block; }
 
-sl-generic-modal.SpicyLyricsModal .sl-modal.slmodal-lyricLayer .sl-modal-container-large {
-  width: min(920px, calc(100vw - 48px));
-}
-
 /* Shared tokens for the editor, the line editor and dialogs. Spicy Lyrics'
    variables win when present; the fallbacks match its dark glass modal. */
 .ll-scope {
@@ -169,115 +167,96 @@ sl-generic-modal.SpicyLyricsModal .sl-modal.slmodal-lyricLayer .sl-modal-contain
   width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
 }
 
-.lyric-layer-panel { min-width: min(760px, 80vw); font-size: 14px; }
-.lyric-layer-panel .ll-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
-.lyric-layer-panel .ll-cover {
-  flex: none; width: 44px; height: 44px; border-radius: 6px; object-fit: cover;
-  background: var(--ll-fill); box-shadow: 0 6px 14px -8px rgba(0,0,0,.8);
+/* Edit mode: the lyrics page is the editor. A toolbar floats over its top. */
+.lyric-layer-control.ll-active { color: #121212 !important; background: #fff !important; border-radius: 50%; }
+#SpicyLyricsPage.ll-panel-host { position: relative; }
+.ll-toolbar-wrap {
+  position: absolute; top: 14px; left: 50%; z-index: 70; display: flex; flex-direction: column; align-items: center; gap: 8px;
+  max-width: calc(100% - 32px); transform: translateX(-50%); font-size: 13px; pointer-events: none;
 }
-.lyric-layer-panel .ll-head-copy { flex: 1; min-width: 0; }
-.lyric-layer-panel .ll-head-title, .lyric-layer-panel .ll-head-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lyric-layer-panel .ll-head-title { font-size: 15px; font-weight: 600; line-height: 1.3; }
-.lyric-layer-panel .ll-head-sub { margin-top: 2px; color: var(--ll-text-2); font-size: 12.5px; font-variant-numeric: tabular-nums; }
-.lyric-layer-panel .ll-head-actions { display: flex; flex: none; align-items: center; gap: 6px; }
+.ll-toolbar-wrap > * { pointer-events: auto; }
+.ll-scope .ll-toolbar {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px; padding: 6px 6px 6px 14px;
+  border-radius: 14px; background: rgba(22,22,24,.92); box-shadow: 0 12px 32px rgba(0,0,0,.45), inset 0 0 0 1px rgba(255,255,255,.1);
+  -webkit-backdrop-filter: blur(20px) saturate(1.2); backdrop-filter: blur(20px) saturate(1.2);
+}
+.ll-scope .ll-toolbar-title { font-weight: 600; white-space: nowrap; }
+.ll-scope .ll-toolbar-progress { color: var(--ll-text-2); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ll-scope .ll-toolbar-separator { width: 1px; height: 18px; margin: 0 4px; background: var(--ll-line-strong); opacity: .5; }
+.ll-scope .ll-toolbar-status { padding: 0 4px; color: var(--ll-text-3); font-size: 12.5px; white-space: nowrap; }
+.ll-scope .ll-toolbar-status[data-dirty="true"] { color: var(--ll-text); }
+.ll-scope .ll-toolbar-status[data-dirty="true"]::before {
+  display: inline-block; width: 7px; height: 7px; margin: 0 7px 1px 0; border-radius: 50%; background: #ffc780; content: "";
+}
 
-.lyric-layer-panel .ll-menu-anchor { position: relative; display: inline-flex; }
-.lyric-layer-panel .ll-menu {
-  position: absolute; top: calc(100% + 6px); right: 0; z-index: 30; display: grid; gap: 1px;
-  width: max-content; min-width: 240px; max-width: 320px; padding: 6px; border-radius: 10px;
-  background: #2a2a2d; box-shadow: 0 18px 40px rgba(0,0,0,.55), inset 0 0 0 1px rgba(255,255,255,.08);
+.ll-scope .ll-menu-anchor { position: relative; display: inline-flex; }
+.ll-scope .ll-menu {
+  position: absolute; top: calc(100% + 8px); left: 50%; z-index: 30; display: grid; gap: 1px;
+  width: max-content; min-width: 240px; max-width: 320px; padding: 6px; border-radius: 10px; transform: translateX(-50%);
+  background: #2a2a2d; box-shadow: 0 18px 40px rgba(0,0,0,.55), inset 0 0 0 1px rgba(255,255,255,.08); text-align: left;
 }
-.lyric-layer-panel .ll-menu[hidden] { display: none; }
-.lyric-layer-panel .ll-menu-item {
+.ll-scope .ll-menu-item {
   display: grid; gap: 1px; width: 100%; padding: 7px 10px; border: 0; border-radius: 6px;
   background: transparent; color: var(--ll-text); font: inherit; text-align: left; cursor: pointer;
 }
-.lyric-layer-panel .ll-menu-item:hover:not(:disabled), .lyric-layer-panel .ll-menu-item:focus-visible { background: var(--ll-fill-strong); outline: none; }
-.lyric-layer-panel .ll-menu-item:disabled { cursor: default; }
-.lyric-layer-panel .ll-menu-item:disabled .ll-menu-label { color: var(--ll-text-3); }
-.lyric-layer-panel .ll-menu-item.danger .ll-menu-label { color: var(--ll-danger); }
-.lyric-layer-panel .ll-menu-item.danger:disabled .ll-menu-label { color: var(--ll-text-3); }
-.lyric-layer-panel .ll-menu-label { font-size: 13px; font-weight: 500; }
-.lyric-layer-panel .ll-menu-detail { color: var(--ll-text-2); font-size: 11.5px; line-height: 1.4; }
-.lyric-layer-panel .ll-menu-separator { height: 1px; margin: 5px 6px; background: var(--ll-line); }
-.lyric-layer-panel .ll-menu-note { padding: 6px 10px; color: var(--ll-text-2); font-size: 12px; line-height: 1.45; }
-.lyric-layer-panel .ll-switch-row { display: flex; align-items: center; gap: 14px; padding: 7px 10px; border-radius: 6px; cursor: pointer; }
-.lyric-layer-panel .ll-switch-row:hover { background: var(--ll-fill-strong); }
-.lyric-layer-panel .ll-switch-copy { display: grid; flex: 1; gap: 1px; }
-.lyric-layer-panel .ll-switch-row input { position: absolute; width: 0; height: 0; opacity: 0; }
-.lyric-layer-panel .ll-switch {
+.ll-scope .ll-menu-item:hover:not(:disabled), .ll-scope .ll-menu-item:focus-visible { background: var(--ll-fill-strong); outline: none; }
+.ll-scope .ll-menu-item:disabled { cursor: default; }
+.ll-scope .ll-menu-item:disabled .ll-menu-label { color: var(--ll-text-3); }
+.ll-scope .ll-menu-item.danger .ll-menu-label { color: var(--ll-danger); }
+.ll-scope .ll-menu-item.danger:disabled .ll-menu-label { color: var(--ll-text-3); }
+.ll-scope .ll-menu-label { font-size: 13px; font-weight: 500; }
+.ll-scope .ll-menu-detail { color: var(--ll-text-2); font-size: 11.5px; line-height: 1.4; }
+.ll-scope .ll-menu-separator { height: 1px; margin: 5px 6px; background: var(--ll-line); }
+.ll-scope .ll-menu-note { padding: 6px 10px; color: var(--ll-text-2); font-size: 12px; line-height: 1.45; }
+.ll-scope .ll-switch-row { display: flex; align-items: center; gap: 14px; padding: 7px 10px; border-radius: 6px; cursor: pointer; }
+.ll-scope .ll-switch-row:hover { background: var(--ll-fill-strong); }
+.ll-scope .ll-switch-copy { display: grid; flex: 1; gap: 1px; }
+.ll-scope .ll-switch-row input { position: absolute; width: 0; height: 0; opacity: 0; }
+.ll-scope .ll-switch {
   position: relative; flex: none; width: 34px; height: 20px; border-radius: 10px;
   background: rgba(255,255,255,.18); transition: background .2s ease;
 }
-.lyric-layer-panel .ll-switch::after {
+.ll-scope .ll-switch::after {
   position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
   background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.4); content: ""; transition: transform .2s cubic-bezier(.23,1,.32,1);
 }
-.lyric-layer-panel .ll-switch-row input:checked + .ll-switch { background: rgba(255,255,255,.62); }
-.lyric-layer-panel .ll-switch-row input:checked + .ll-switch::after { transform: translateX(14px); }
-.lyric-layer-panel .ll-switch-row input:focus-visible + .ll-switch { outline: 2px solid var(--ll-text); outline-offset: 2px; }
+.ll-scope .ll-switch-row input:checked + .ll-switch { background: rgba(255,255,255,.62); }
+.ll-scope .ll-switch-row input:checked + .ll-switch::after { transform: translateX(14px); }
+.ll-scope .ll-switch-row input:focus-visible + .ll-switch { outline: 2px solid var(--ll-text); outline-offset: 2px; }
 
-.lyric-layer-panel .ll-banner {
-  display: flex; align-items: center; gap: 12px; margin: 0 0 12px; padding: 8px 8px 8px 14px;
-  border-radius: 8px; background: var(--ll-fill-strong); font-size: 13px; line-height: 1.45;
+.ll-scope .ll-banner {
+  display: flex; align-items: center; gap: 8px; max-width: 560px; padding: 6px 6px 6px 14px;
+  border-radius: 10px; background: rgba(40,40,44,.94); box-shadow: 0 10px 26px rgba(0,0,0,.4), inset 0 0 0 1px rgba(255,255,255,.08);
+  font-size: 13px; line-height: 1.45;
 }
-.lyric-layer-panel .ll-banner[hidden] { display: none; }
-.lyric-layer-panel .ll-banner-text { flex: 1; min-width: 0; padding: 4px 0; }
+.ll-scope .ll-banner-text { flex: 1; min-width: 0; }
 
-.lyric-layer-panel .ll-lines { display: grid; gap: 2px; }
-.lyric-layer-panel .ll-row {
-  display: grid; grid-template-columns: 28px minmax(0, 1fr) minmax(0, 1fr); gap: 14px; align-items: start;
-  padding: 5px 8px; border-radius: 10px; transition: background .15s ease;
+/* Lines and their translations, while editing. */
+#SpicyLyricsPage.ll-edit-mode .lyric-layer-translation:not(.ll-inline-editor) {
+  cursor: text; text-decoration: underline dashed rgba(255,255,255,.22); text-decoration-thickness: 1.5px; text-underline-offset: .28em;
 }
-.lyric-layer-panel .ll-row:focus-within { background: var(--ll-fill); }
-.lyric-layer-panel .ll-row-index {
-  padding-top: 10px; color: var(--ll-text-3); font-size: 12px; font-variant-numeric: tabular-nums; text-align: right;
+#SpicyLyricsPage .lyric-layer-translation.ll-placeholder,
+#SpicyLyricsPage .line > .lyric-layer-translation.ll-placeholder {
+  color: rgba(255,255,255,.32) !important; -webkit-text-fill-color: rgba(255,255,255,.32) !important;
+  background: none !important; text-shadow: none !important; font-weight: 500;
 }
-.lyric-layer-panel .ll-row-original {
-  padding: 9px 0; color: var(--ll-text-2); font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; transition: color .15s ease;
+#SpicyLyricsPage .line:has(> .ll-inline-editor) { outline: 1.5px dashed rgba(255,199,128,.6); outline-offset: 8px; border-radius: 12px; }
+#SpicyLyricsPage .line > .lyric-layer-translation.ll-inline-editor {
+  position: relative; display: block; margin-top: .3em; color: #fff !important; -webkit-text-fill-color: #fff !important;
+  background: none !important; text-shadow: none !important; filter: none !important; cursor: auto;
 }
-.lyric-layer-panel .ll-row:focus-within .ll-row-original { color: var(--ll-text); }
-.lyric-layer-panel .ll-row-translation { position: relative; min-width: 0; }
-.lyric-layer-panel .ll-input {
-  display: block; width: 100%; min-height: 40px; box-sizing: border-box; margin: 0; padding: 9px 40px 9px 12px;
+#SpicyLyricsPage .ll-inline-editor .ll-inline-input {
+  display: block; width: 100%; min-height: 1.5em; box-sizing: border-box; margin: 0; padding: .18em 2.4em .18em .35em;
   overflow: hidden; resize: none; border: 0; border-radius: 8px; outline: none;
-  background: var(--ll-fill); box-shadow: inset 0 0 0 1px var(--ll-line); color: var(--ll-text);
-  font: inherit; font-size: 14px; line-height: 1.45;
-  transition: background .15s ease, box-shadow .15s ease;
+  background: rgba(255,255,255,.1); box-shadow: inset 0 0 0 1.5px rgba(255,255,255,.45);
+  color: #fff; -webkit-text-fill-color: #fff; caret-color: #fff; font: inherit; line-height: 1.35; text-shadow: none;
 }
-.lyric-layer-panel .ll-input::placeholder { color: var(--ll-text-3); }
-.lyric-layer-panel .ll-input:hover { background: rgba(255,255,255,.08); }
-.lyric-layer-panel .ll-input:focus { background: var(--ll-fill-strong); box-shadow: inset 0 0 0 1px var(--ll-line-strong); }
-.lyric-layer-panel .ll-row-tune {
-  position: absolute; top: 6px; right: 6px; display: grid; width: 28px; height: 28px; padding: 6px;
-  box-sizing: border-box; border: 0; border-radius: 6px; background: transparent; color: var(--ll-text-3);
-  opacity: .5; cursor: pointer; transition: opacity .15s ease, background .15s ease, color .15s ease;
+#SpicyLyricsPage .ll-inline-editor .ll-inline-input::placeholder { color: rgba(255,255,255,.35); -webkit-text-fill-color: rgba(255,255,255,.35); }
+#SpicyLyricsPage .ll-inline-editor .ll-inline-tune {
+  position: absolute; top: 50%; right: .3em; width: 30px; height: 30px; transform: translateY(-50%);
+  background: transparent; color: rgba(255,255,255,.75); -webkit-text-fill-color: currentColor; font-size: 13px;
 }
-.lyric-layer-panel .ll-row:hover .ll-row-tune, .lyric-layer-panel .ll-row:focus-within .ll-row-tune { opacity: 1; }
-.lyric-layer-panel .ll-row-tune:hover { background: var(--ll-fill-strong); color: var(--ll-text); }
-.lyric-layer-panel .ll-row-tune:focus-visible { opacity: 1; outline: 2px solid var(--ll-text); outline-offset: -2px; }
-.lyric-layer-panel .ll-row-tune[data-custom="true"] { color: var(--ll-text); opacity: 1; }
-.lyric-layer-panel .ll-row-tune[data-custom="true"]::after {
-  position: absolute; top: 4px; right: 4px; width: 6px; height: 6px; border-radius: 50%;
-  background: #8fd6ff; box-shadow: 0 0 0 2px #1e1e20; content: "";
-}
-
-.lyric-layer-panel .ll-empty { display: grid; justify-items: center; gap: 10px; padding: 56px 16px 64px; text-align: center; }
-.lyric-layer-panel .ll-empty-title { margin: 0; font-size: 15px; font-weight: 600; }
-.lyric-layer-panel .ll-empty-text { max-width: 380px; margin: 0 0 6px; color: var(--ll-text-2); font-size: 13px; line-height: 1.55; }
-
-.ll-scope .ll-footer {
-  position: sticky; bottom: -24px; z-index: 5; display: flex; align-items: center; gap: 8px;
-  margin-top: 12px; padding: 14px 0 18px; border-top: 1px solid var(--ll-line);
-  background: rgba(24,24,26,.92); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
-}
-.ll-scope .ll-footer[hidden] { display: none; }
-.ll-scope .ll-footer-status { flex: 1; min-width: 0; margin: 0; color: var(--ll-text-3); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
-.ll-scope .ll-footer-status[data-dirty="true"] { color: var(--ll-text); }
-.ll-scope .ll-footer-status[data-dirty="true"]::before {
-  display: inline-block; width: 7px; height: 7px; margin: 0 8px 1px 2px; border-radius: 50%; background: #ffc780; content: "";
-}
-.ll-scope .ll-footer-status[data-error="true"] { color: var(--ll-danger); }
+#SpicyLyricsPage .ll-inline-editor .ll-inline-tune:hover { background: var(--ll-fill-strong); color: #fff; }
 
 .ll-dialog-backdrop {
   position: fixed; inset: 0; z-index: 2147483000; display: grid; place-items: center; padding: 24px;
@@ -291,14 +270,6 @@ sl-generic-modal.SpicyLyricsModal .sl-modal.slmodal-lyricLayer .sl-modal-contain
 .ll-dialog-backdrop .ll-dialog-text { margin: 0 0 22px; color: var(--ll-text-2); font-size: 13px; line-height: 1.6; }
 .ll-dialog-backdrop .ll-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
-@media (max-width: 720px) {
-  .lyric-layer-panel { min-width: 0; }
-  .lyric-layer-panel .ll-head { flex-wrap: wrap; }
-  .lyric-layer-panel .ll-head-actions { width: 100%; }
-  .lyric-layer-panel .ll-row { grid-template-columns: 22px minmax(0, 1fr); gap: 4px 10px; }
-  .lyric-layer-panel .ll-row-original { padding-bottom: 2px; }
-  .lyric-layer-panel .ll-row-translation { grid-column: 2; }
-}
 ` + VISUAL_EDITOR_STYLES;
 
 export function injectStyles(): void {

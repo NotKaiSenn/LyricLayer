@@ -127,6 +127,9 @@ export const VISUAL_EDITOR_STYLES = `
 }
 @keyframes ll-panel-in { from { opacity: 0; translate: 0 16px; } }
 #SpicyLyricsPage.ll-panel-host { position: relative; }
+#SpicyLyricsPage.ll-panel-open .LyricsContainer {
+  align-self: flex-start; height: calc(100% - var(--ll-panel-height, 0px)) !important; transition: height .22s cubic-bezier(.2,.8,.2,1);
+}
 #SpicyLyricsPage .ll-editing-line { outline: 1.5px dashed rgba(255,199,128,.65); outline-offset: 10px; border-radius: 12px; }
 @media (prefers-reduced-motion: reduce) { .ll-line-panel { animation: none; } }
 

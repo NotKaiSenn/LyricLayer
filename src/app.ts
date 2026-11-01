@@ -38,6 +38,9 @@ class LyricLayerApp {
     getExportLyrics: readSpicyLyricsLines,
     onEntryChanged: (trackUri) => this.reloadEntry(trackUri),
     onPreview: (trackUri, lines) => this.preview(trackUri, lines),
+    setEditHooks: (hooks) => this.renderer.setEditHooks(hooks),
+    renderNow: () => this.renderer.renderNow(),
+    onModeChange: (active) => this.syncButtons(active),
   });
   private entry?: TranslationEntry;
   /** Unsaved lines shown on the page while a line is being edited. */
@@ -67,6 +70,7 @@ class LyricLayerApp {
   private loadCurrentTrack(): Promise<void> {
     const track = currentTrack();
     if (this.trackUri === track?.uri && this.trackLoad) return this.trackLoad;
+    if (this.trackUri !== track?.uri) this.ui.trackChanged(track?.uri);
     const generation = ++this.loadGeneration;
     this.trackUri = track?.uri;
     this.entry = undefined;
@@ -154,6 +158,13 @@ class LyricLayerApp {
     this.render();
   }
 
+  private syncButtons(active: boolean): void {
+    document.querySelectorAll<HTMLElement>("[data-lyric-layer-button]").forEach((button) => {
+      button.setAttribute("aria-pressed", String(active));
+      button.classList.toggle("ll-active", active);
+    });
+  }
+
   private insertButtons(): void {
     if (this.interfaceScheduled) return;
     this.interfaceScheduled = true;
@@ -165,16 +176,18 @@ class LyricLayerApp {
         const button = document.createElement("button");
         button.className = container.classList.contains("CardControls") ? "ViewControl CardControl lyric-layer-control" : "ViewControl lyric-layer-control";
         button.dataset.lyricLayerButton = "true";
-        button.title = "自定义翻译";
-        button.setAttribute("aria-label", "自定义翻译");
+        button.title = "编辑译文";
+        button.setAttribute("aria-label", "编辑译文");
+        button.setAttribute("aria-pressed", String(this.ui.active));
+        button.classList.toggle("ll-active", this.ui.active);
         button.innerHTML = BUTTON_ICON;
         button.addEventListener("click", (event) => {
           event.preventDefault();
           event.stopPropagation();
-          void this.ui.open();
+          void this.ui.toggle();
         });
         try {
-          window.Spicetify?.Tippy?.(button, { ...(window.Spicetify.TippyProps ?? {}), content: "自定义翻译" });
+          window.Spicetify?.Tippy?.(button, { ...(window.Spicetify.TippyProps ?? {}), content: "编辑译文" });
         } catch { /* native title remains as fallback */ }
         const romanization = container.querySelector("#RomanizationToggle");
         if (romanization) romanization.insertAdjacentElement("afterend", button);
