@@ -114,7 +114,7 @@ export const VISUAL_EDITOR_STYLES = `
 /* The line editor lives in a panel docked under the real lyrics, which act
    as the preview. It only exists while a line is being edited. */
 .ll-line-panel {
-  position: absolute; left: 0; right: 0; bottom: 0; z-index: 60; box-sizing: border-box;
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 102; box-sizing: border-box;
   max-height: min(50%, 400px); overflow-y: auto; padding: 14px 28px 16px;
   border-top: 1px solid rgba(255,255,255,.1); background: rgba(20,20,22,.94);
   -webkit-backdrop-filter: blur(24px) saturate(1.2); backdrop-filter: blur(24px) saturate(1.2);

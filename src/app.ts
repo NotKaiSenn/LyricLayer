@@ -58,6 +58,7 @@ class LyricLayerApp {
     injectStyles();
     this.renderer.start(() => {
       this.insertButtons();
+      this.ui.pageChanged();
       // Player.data can arrive after the initial songchange event. Reconcile the
       // track even when its lyrics cache has already been resolved.
       void this.ensureLyrics(false);
@@ -170,11 +171,12 @@ class LyricLayerApp {
     this.interfaceScheduled = true;
     queueMicrotask(() => {
       this.interfaceScheduled = false;
-      const controls = document.querySelectorAll("#SpicyLyricsPage .ViewControls, #SpicyLyricsNPVCard .CardControls");
+      // Only the full lyrics page: the Now Playing card is too small to edit in.
+      const controls = document.querySelectorAll("#SpicyLyricsPage:not(.CardMode) .ViewControls");
       controls.forEach((container) => {
         if (container.querySelector("[data-lyric-layer-button]")) return;
         const button = document.createElement("button");
-        button.className = container.classList.contains("CardControls") ? "ViewControl CardControl lyric-layer-control" : "ViewControl lyric-layer-control";
+        button.className = "ViewControl lyric-layer-control";
         button.dataset.lyricLayerButton = "true";
         button.title = "编辑译文";
         button.setAttribute("aria-label", "编辑译文");

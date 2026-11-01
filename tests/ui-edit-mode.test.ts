@@ -260,3 +260,24 @@ test("没有歌词页或原歌词时不进入编辑模式，并说明原因", as
   assert.equal(noLyrics.toolbar(), undefined);
   assert.match(noLyrics.notifications[0]!.message, /还没有取得这首歌的原歌词/);
 });
+
+test("歌词页关闭或变成小窗时退出编辑并暂存修改", async () => {
+  for (const cardMode of [false, true]) {
+    const run = createUiHarness({ entry, lyrics });
+    await run.enter();
+    run.clickLine(0);
+    run.type("改过的一");
+    run.ui.pageChanged();
+    assert.ok(run.toolbar(), "nothing happens while the page is still there");
+    run.closePage(cardMode);
+    run.ui.pageChanged();
+    assert.equal(run.ui.active, false);
+    assert.equal(run.hooks(), undefined);
+    assert.match(run.notifications[0]!.message, /歌词页已关闭，未保存的修改已暂存/);
+    if (cardMode) {
+      await run.enter();
+      assert.equal(run.ui.active, false, "the small card is not an editing surface");
+      assert.match(run.notifications[1]!.message, /完整歌词页/);
+    }
+  }
+});

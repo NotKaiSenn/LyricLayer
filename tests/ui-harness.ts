@@ -334,6 +334,8 @@ export function createUiHarness(options: HarnessOptions = {}) {
     dialogButton: (label: string) => find(node => node.tag === "button" && node.text() === label, `dialog button ${label}`, body),
     setFile: (text: string, name?: string) => { file = { name, text: async () => text }; },
     setTrack: (next: TrackInfo) => { currentTrack = next; },
+    /** Spicy closes the page, or turns it into the small Now Playing card. */
+    closePage: (cardMode = false) => { if (cardMode) page.classList.add("CardMode"); else page.remove(); },
     entry: () => entry,
   };
   return harness;

@@ -18,6 +18,13 @@ export interface EditHooks {
   onEditorMounted?(): void;
 }
 
+/** The full Spicy Lyrics page. The Now Playing card reuses the same element in
+ * CardMode, which is too small to edit in. */
+export function lyricsPage(): HTMLElement | undefined {
+  const page = document.getElementById("SpicyLyricsPage");
+  return page && !page.classList.contains("CardMode") ? page : undefined;
+}
+
 /** Let Spicy Lyrics handle a click on our injected text as a click on its own
  * line. Its delegated listener only reacts to a word (or emphasis letter) of a
  * syllable line, or to the line element of a line-synced one. */

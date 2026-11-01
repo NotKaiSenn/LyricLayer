@@ -23,6 +23,7 @@ const stubs: Record<string, string> = {
     constructor(options) { window.harness.uiOptions = options; window.harness.trackChanges = []; }
     get active() { return false; }
     trackChanged(uri) { window.harness.trackChanges.push(uri); }
+    pageChanged() {}
   }`,
 };
 const bundle = await build({

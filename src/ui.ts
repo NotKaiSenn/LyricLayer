@@ -1,4 +1,4 @@
-import { clickNativeLine, type EditHooks } from "./dom-renderer";
+import { clickNativeLine, lyricsPage, type EditHooks } from "./dom-renderer";
 import { EditSession, exportChoices, type DraftState } from "./edit-session";
 import { createLinePanel, type LinePanel } from "./line-panel";
 import type { TranslationStore } from "./storage";
@@ -87,9 +87,9 @@ export class TranslationUi {
         notify("当前没有正在播放的 Spotify 歌曲", true);
         return;
       }
-      const page = document.getElementById("SpicyLyricsPage");
+      const page = lyricsPage();
       if (!page) {
-        notify("请在 Spicy Lyrics 的歌词页里编辑译文", true);
+        notify("请在 Spicy Lyrics 的完整歌词页里编辑译文", true);
         return;
       }
       const [lyrics, saved] = await Promise.all([this.dependencies.getLyrics(), this.dependencies.store.get(track.uri)]);
@@ -145,6 +145,17 @@ export class TranslationUi {
       if (choice === "discard") this.drafts.delete(session.track.uri);
     }
     this.teardown();
+  }
+
+  /** The lyrics page was closed or switched to the small card: leave edit mode,
+   * keeping unsaved work for next time. */
+  pageChanged(): void {
+    const session = this.session;
+    const page = this.chrome?.page;
+    if (!session || !page || (page.isConnected && page === lyricsPage())) return;
+    const dirty = session.dirty;
+    this.teardown();
+    notify(dirty ? "歌词页已关闭，未保存的修改已暂存，下次进入编辑模式时可以恢复" : "歌词页已关闭，编辑模式已退出");
   }
 
   /** The song changed: leave edit mode, keeping unsaved work for next time. */
@@ -227,6 +238,33 @@ export class TranslationUi {
     if (getComputedStyle(page).position === "static") page.classList.add("ll-panel-host");
     page.appendChild(root);
     this.chrome = { page, root, progress, status, save, banner };
+
+    // Spicy's own view controls move between layouts (top, bottom, inside the
+    // Now Bar) and sit above everything. Keep the toolbar clear of them.
+    const place = () => {
+      const controls = page.querySelector<HTMLElement>(".ViewControls");
+      const area = controls?.getBoundingClientRect?.();
+      const own = root.getBoundingClientRect?.();
+      const base = page.getBoundingClientRect?.();
+      let top = 14;
+      if (area && own && base && area.width && area.height) {
+        // Test the default spot, not wherever the toolbar is (or is animating) now.
+        const ownTop = base.top + top;
+        const overlaps = area.left < own.right + 8 && area.right > own.left - 8
+          && area.top < ownTop + own.height + 8 && area.bottom > ownTop - 8;
+        if (overlaps) top = Math.round(area.bottom - base.top + 10);
+      }
+      root.style.top = `${top}px`;
+    };
+    place();
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(place);
+    const layout = typeof MutationObserver === "function" ? new MutationObserver(place) : undefined;
+    layout?.observe(page, { attributes: true, attributeFilter: ["class"] });
+    window.addEventListener?.("resize", place);
+    this.cleanups.push(() => {
+      layout?.disconnect();
+      window.removeEventListener?.("resize", place);
+    });
 
     const onKey = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
@@ -393,7 +431,7 @@ export class TranslationUi {
     const session = this.session;
     const index = session?.lines[position]?.index;
     if (!session || index === undefined) return;
-    const marker = document.querySelector(`#SpicyLyricsPage [data-lyric-layer-translation][data-line-index="${index}"]`);
+    const marker = this.chrome?.page.querySelector(`[data-lyric-layer-translation][data-line-index="${index}"]`);
     if (marker?.parentElement) {
       clickNativeLine(marker.parentElement);
       return;

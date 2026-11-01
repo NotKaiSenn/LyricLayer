@@ -1,3 +1,4 @@
+import { lyricsPage } from "./dom-renderer";
 import { normalizeLyricText } from "./matcher";
 import { playbackPosition } from "./playback-clock";
 import { textWithoutInjectedTranslation } from "./spicy-lyrics-source";
@@ -26,8 +27,8 @@ function lineBounds(line: LyricLine): { start: number; end: number } | undefined
 
 function findLineElement(line: LyricLine): HTMLElement | undefined {
   const key = normalizeLyricText(line.text);
-  const candidates = Array.from(document.querySelectorAll<HTMLElement>(
-    "#SpicyLyricsPage .SpicyLyricsScrollContainer .line:not(.bg-line):not(.musical-line)"))
+  const candidates = Array.from(lyricsPage()?.querySelectorAll<HTMLElement>(
+    ".SpicyLyricsScrollContainer .line:not(.bg-line):not(.musical-line)") ?? [])
     .filter(node => normalizeLyricText(textWithoutInjectedTranslation(node)) === key);
   return candidates.find(node => node.querySelector("[data-lyric-layer-translation]")?.getAttribute("data-line-index") === String(line.index))
     ?? candidates.find(node => node.parentElement?.dataset.index === String(line.index)) ?? candidates[0];
@@ -111,7 +112,7 @@ export function createLinePanel(): LinePanel {
       stopAudition();
       current = options;
       if (!container.isConnected) {
-        const page = document.getElementById("SpicyLyricsPage");
+        const page = lyricsPage();
         const target = page ?? document.body;
         container.classList.toggle("floating", !page);
         if (page && getComputedStyle(page).position === "static") {

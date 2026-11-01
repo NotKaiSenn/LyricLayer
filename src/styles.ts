@@ -171,8 +171,8 @@ export const STYLES = `
 .lyric-layer-control.ll-active { color: #121212 !important; background: #fff !important; border-radius: 50%; }
 #SpicyLyricsPage.ll-panel-host { position: relative; }
 .ll-toolbar-wrap {
-  position: absolute; top: 14px; left: 50%; z-index: 70; display: flex; flex-direction: column; align-items: center; gap: 8px;
-  max-width: calc(100% - 32px); transform: translateX(-50%); font-size: 13px; pointer-events: none;
+  position: absolute; top: 14px; left: 50%; z-index: 102; display: flex; flex-direction: column; align-items: center; gap: 8px;
+  max-width: calc(100% - 32px); transform: translateX(-50%); font-size: 13px; pointer-events: none; transition: top .2s ease;
 }
 .ll-toolbar-wrap > * { pointer-events: auto; }
 .ll-scope .ll-toolbar {
