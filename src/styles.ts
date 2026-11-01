@@ -170,6 +170,10 @@ export const STYLES = `
 /* Edit mode: the lyrics page is the editor. A toolbar floats over its top. */
 .lyric-layer-control.ll-active { color: #121212 !important; background: #fff !important; border-radius: 50%; }
 #SpicyLyricsPage.ll-panel-host { position: relative; }
+/* Keep native scroll anchoring and row ripples from moving the editing surface.
+   Row transform still positions the virtual list; lyric/word animation is intact. */
+#SpicyLyricsPage .ll-scroll-owned { scroll-behavior: auto !important; overflow-anchor: none !important; }
+#SpicyLyricsPage .ll-scroll-owned .VirtualLyricsContainer > [data-index] { translate: none !important; }
 .ll-toolbar-wrap {
   position: absolute; top: 14px; left: 50%; z-index: 102; display: flex; flex-direction: column; align-items: center; gap: 8px;
   max-width: calc(100% - 32px); transform: translateX(-50%); font-size: 13px; pointer-events: none; transition: top .2s ease;

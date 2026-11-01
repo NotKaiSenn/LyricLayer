@@ -116,6 +116,9 @@ class LyricLayerApp {
     else if (this.trackLoad) await this.trackLoad;
     if (!track || this.trackUri !== track.uri || currentTrack()?.uri !== track.uri) return [];
     if (this.sourceResolved) return this.lyrics;
+    // A session's positions are fixed for its lifetime. Do not replace a DOM
+    // fallback with a different cache ordering underneath an open editor.
+    if (this.ui.active && this.lyrics.length) return this.lyrics;
     if (this.sourceLoad) return this.sourceLoad;
     const generation = this.loadGeneration;
     const loading = (async () => {

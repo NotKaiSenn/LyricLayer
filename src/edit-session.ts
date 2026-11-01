@@ -217,7 +217,8 @@ export class EditSession {
   /** Whether a stored draft was made against this exact saved version and lyrics. */
   fits(state: DraftState): boolean {
     return state.savedAt === (this.saved?.updatedAt ?? 0) && state.lines.length === this.lines.length
-      && state.lines.every((line, position) => line.originalText === this.lines[position]?.originalText);
+      && state.lines.every((line, position) => line.originalText === this.lines[position]?.originalText
+        && line.index === this.lines[position]?.index && line.startTime === this.lines[position]?.startTime);
   }
 
   discard(): void {
@@ -284,10 +285,14 @@ export class EditSession {
   }
 
   markSaved(entry: TranslationEntry): void {
+    const unchanged = JSON.stringify(this.buildLines()) === JSON.stringify(entry.lines);
     this.saved = entry;
-    this.lines = entry.lines.map(cloneLine);
-    this.values = this.lines.map((line) => line.translatedText);
-    this.visuallyEdited.clear();
-    this.baseline = JSON.stringify(this.buildLines());
+    if (unchanged) {
+      this.lines = entry.lines.map(cloneLine);
+      this.values = this.lines.map((line) => line.translatedText);
+      this.visuallyEdited.clear();
+    }
+    // Storage is asynchronous: typing during a save remains an unsaved draft.
+    this.baseline = JSON.stringify(entry.lines);
   }
 }

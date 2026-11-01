@@ -1,6 +1,7 @@
 import { clickNativeLine, lyricsPage, type EditHooks } from "./dom-renderer";
 import { EditSession, exportChoices, type DraftState } from "./edit-session";
 import { createLinePanel, type LinePanel } from "./line-panel";
+import { EditScroll } from "./edit-scroll";
 import type { TranslationStore } from "./storage";
 import { isTranslationAnimationEnabled, setTranslationAnimationEnabled } from "./translation-settings";
 import type { LyricLine, TrackInfo, TranslationLine } from "./types";
@@ -44,7 +45,7 @@ function player() {
 
 function pausePlayback(): void {
   try {
-    if (player()?.isPlaying?.()) player()?.pause?.();
+    if (player()?.isPlaying?.()) void Promise.resolve(player()?.pause?.()).catch(() => {});
   } catch { /* Editing still works without playback control. */ }
 }
 
@@ -63,6 +64,7 @@ export class TranslationUi {
   private editing?: number;
   private panel?: LinePanel;
   private panelPosition?: number;
+  private editScroll?: EditScroll;
   private drafts = new Map<string, DraftState>();
   private busy = false;
   private saving = false;
@@ -95,7 +97,7 @@ export class TranslationUi {
         return;
       }
       const [lyrics, saved] = await Promise.all([this.dependencies.getLyrics(), this.dependencies.store.get(track.uri)]);
-      if (this.dependencies.getTrack()?.uri !== track.uri) return;
+      if (this.dependencies.getTrack()?.uri !== track.uri || !page.isConnected || lyricsPage() !== page) return;
       if (!lyrics.length) {
         notify("还没有取得这首歌的原歌词，请等歌词加载完成后再试", true);
         return;
@@ -109,7 +111,7 @@ export class TranslationUi {
         session.restore(draft);
         this.showBanner("已恢复上次未保存的修改", { label: "放弃修改", run: () => {
           session.restore(clean);
-          this.syncEditor();
+          this.refreshEditor();
           this.changed();
         } });
       } else this.drafts.delete(track.uri);
@@ -144,6 +146,7 @@ export class TranslationUi {
       }
       if (this.session !== session || choice === "stay") return;
       if (choice === "save" && !(await this.save())) return;
+      if (this.session !== session || (choice === "save" && session.dirty)) return;
       if (choice === "discard") this.drafts.delete(session.track.uri);
     }
     this.teardown();
@@ -174,6 +177,10 @@ export class TranslationUi {
     if (!session) return;
     this.closePanel();
     this.editing = undefined;
+    this.editScroll?.stop();
+    this.editScroll = undefined;
+    this.editor?.root.remove();
+    this.editor = undefined;
     this.cleanups.splice(0).forEach((cleanup) => cleanup());
     this.chrome?.page.classList.remove("ll-edit-mode");
     this.chrome?.root.remove();
@@ -189,13 +196,13 @@ export class TranslationUi {
     if (!session) return;
     const editor = this.editing === undefined ? undefined : this.inlineEditor();
     const index = this.editing === undefined ? undefined : session.lines[this.editing]?.index;
+    // Only explicit activation focuses the field; virtualization mounts must
+    // not steal focus from transport controls or interrupt an audition.
     this.dependencies.setEditHooks({
       placeholder: PLACEHOLDER,
       editing: editor && index !== undefined
         ? { index, element: editor.root, after: this.panelPosition !== undefined } : undefined,
       onActivate: (lyricIndex, line) => this.activateFromPage(lyricIndex, line),
-      // Spicy re-created the row: give focus back, but never move the page for it.
-      onEditorMounted: () => this.focusEditor(false),
     });
   }
 
@@ -281,10 +288,12 @@ export class TranslationUi {
     const onPointer = (event: Event) => {
       const target = event.target as Node | null;
       if (this.editing === undefined || !target) return;
-      // The line being edited (its words too: clicking them seeks) and our own UI
-      // keep the editor open. Unfolded, the editor sits right after its line.
+      // The unfolded panel is explicitly dismissed. Using Spotify's pause/seek
+      // controls, or clicking another translation, must leave it available.
+      if (this.panelPosition !== undefined) return;
+      // The line being edited and our own UI keep the plain field open.
       const host = this.editor?.root;
-      const line = this.panelPosition === undefined ? host?.parentElement : host?.previousElementSibling;
+      const line = host?.parentElement;
       if (host?.contains(target) || line?.contains(target) || root.contains(target) || (target as Element).closest?.(".ll-dialog-backdrop")) return;
       this.deactivate();
     };
@@ -324,7 +333,8 @@ export class TranslationUi {
     input.placeholder = "输入译文";
     const tune = iconButton("对齐与动画", ICONS.tune, "small ll-inline-tune");
     root.append(input, tune);
-    input.addEventListener("focus", pausePlayback);
+    root.addEventListener("click", event => event.stopPropagation());
+    root.addEventListener("keydown", event => event.stopPropagation());
     input.addEventListener("input", () => {
       if (this.editing === undefined) return;
       this.session?.setValue(this.editing, input.value);
@@ -376,6 +386,8 @@ export class TranslationUi {
   private activateFromPage(lyricIndex: number, line: Element): void {
     const position = this.session?.positionOf(lyricIndex);
     if (position === undefined) return;
+    // Acquire the viewport before the native click can queue a forced seek scroll.
+    this.ensureEditScroll();
     // The click is a native one too: Spicy seeks to the clicked line.
     clickNativeLine(line);
     if (this.panelPosition !== undefined) this.openPanel(position);
@@ -385,23 +397,27 @@ export class TranslationUi {
   /** Start typing into one line, in place on the page. Only a click on the page
    * seeks (natively): moving between lines by keyboard or the panel never moves
    * playback, so a paused player is not repeatedly re-seeked. */
-  private activate(position: number): void {
+  private activate(position: number, preferredTop?: number): void {
     const session = this.session;
     if (!session || position < 0 || position >= session.size) return;
     const editor = this.inlineEditor();
     this.editing = position;
+    this.ensureEditScroll();
     editor.root.dataset.lineIndex = String(session.lines[position]!.index);
     this.syncEditor();
     this.installHooks();
     this.dependencies.renderNow();
     pausePlayback();
     this.focusEditor();
+    this.editScroll?.reveal(editor.root, preferredTop);
   }
 
   private deactivate(): void {
     if (this.editing === undefined) return;
     this.closePanel();
     this.editing = undefined;
+    this.editScroll?.stop();
+    this.editScroll = undefined;
     this.editor?.input.blur();
     this.installHooks();
   }
@@ -410,7 +426,11 @@ export class TranslationUi {
     if (this.editing === undefined || !this.session) return;
     const next = this.editing + delta;
     if (next < 0 || next >= this.session.size) return;
-    this.activate(next);
+    this.activate(next, this.editScroll?.capture());
+  }
+
+  private ensureEditScroll(): void {
+    if (!this.editScroll && this.chrome) this.editScroll = new EditScroll(this.chrome.page);
   }
 
   private syncEditor(): void {
@@ -420,8 +440,13 @@ export class TranslationUi {
     resizeTextarea(editor.input);
   }
 
-  /** reveal: scroll the editor into view; only for an explicit move to a line. */
-  private focusEditor(reveal = true): void {
+  private refreshEditor(): void {
+    if (this.panelPosition !== undefined) this.openPanel(this.panelPosition);
+    else this.syncEditor();
+  }
+
+  /** Focus never scrolls ancestors. EditScroll is the only editing scroll owner. */
+  private focusEditor(): void {
     const editor = this.editor;
     if (!editor || this.editing === undefined || !editor.root.isConnected) return;
     // The plain field, or the expanded editor's own text field.
@@ -432,16 +457,13 @@ export class TranslationUi {
       field.setSelectionRange?.(end, end);
     }
     if (this.panelPosition === undefined) resizeTextarea(editor.input);
-    const box = reveal ? editor.root.getBoundingClientRect?.() : undefined;
-    if (box && (box.top < 96 || box.bottom > window.innerHeight - 24)) {
-      editor.root.scrollIntoView?.({ block: box.height > window.innerHeight * 0.5 ? "start" : "center", behavior: "smooth" });
-    }
   }
 
   /** Alignment and animation for one line, unfolded right under that line. */
   private openPanel(position: number): void {
     const session = this.session;
     if (!session || position < 0 || position >= session.size) return;
+    const preferredTop = this.panelPosition === undefined ? undefined : this.editScroll?.capture();
     this.panel?.close();
     this.panelPosition = position;
     this.panel ??= createLinePanel();
@@ -451,11 +473,13 @@ export class TranslationUi {
       title: `第 ${position + 1} 行`,
       canNavigate: { previous: position > 0, next: position < session.size - 1 },
       onChange: (draft) => {
+        if (this.session !== session || this.panelPosition !== position) return;
         session.setLine(position, draft);
         this.changed();
       },
       onClose: () => this.closePanel(),
       onNavigate: (delta, draft) => {
+        if (this.session !== session || this.panelPosition !== position) return;
         session.setLine(position, draft);
         this.changed();
         this.openPanel(position + delta);
@@ -464,7 +488,7 @@ export class TranslationUi {
     const editor = this.inlineEditor();
     editor.root.classList.add("expanded");
     editor.root.replaceChildren(element);
-    this.activate(position);
+    this.activate(position, preferredTop);
   }
 
   /** Fold the line editor back into the plain field of the same line. */
@@ -480,6 +504,7 @@ export class TranslationUi {
     this.installHooks();
     this.dependencies.renderNow();
     this.focusEditor();
+    this.editScroll?.reveal(editor.root);
   }
 
   private async save(): Promise<boolean> {
@@ -492,8 +517,9 @@ export class TranslationUi {
       await this.dependencies.store.save(entry);
       await this.dependencies.onEntryChanged(session.track.uri);
       session.markSaved(entry);
-      this.drafts.delete(session.track.uri);
-      if (this.chrome) this.chrome.banner.hidden = true;
+      if (session.dirty) this.drafts.set(session.track.uri, session.snapshot());
+      else this.drafts.delete(session.track.uri);
+      if (this.session === session && this.chrome) this.chrome.banner.hidden = true;
       notify("翻译已保存");
       return true;
     } catch (error) {
@@ -512,6 +538,7 @@ export class TranslationUi {
       const file = await chooseFile(".txt,.lrc,.json,text/plain,application/json");
       if (!file || this.session !== session) return;
       const text = await file.text();
+      if (this.session !== session) return;
       const before = session.snapshot();
       const outcome = session.import(file, text);
       if (outcome.kind === "other-track") {
@@ -526,11 +553,11 @@ export class TranslationUi {
         notify(`已保存到${outcome.name}`);
         return;
       }
-      this.syncEditor();
+      this.refreshEditor();
       this.changed();
       this.showBanner(`${outcome.message}。确认无误后保存。`, { label: "撤销导入", run: () => {
         session.restore(before);
-        this.syncEditor();
+        this.refreshEditor();
         this.changed();
       } });
     } catch (error) {
@@ -578,10 +605,12 @@ export class TranslationUi {
           if (!accepted || this.session !== session) return;
           await this.dependencies.store.delete(session.track.uri);
           await this.dependencies.onEntryChanged(session.track.uri);
+          if (this.session !== session) return;
           this.drafts.delete(session.track.uri);
           this.closePanel();
           this.session = new EditSession(session.track, session.lyrics, undefined);
           this.syncEditor();
+          this.installHooks();
           this.changed();
           notify("已删除这首歌的翻译");
         } },

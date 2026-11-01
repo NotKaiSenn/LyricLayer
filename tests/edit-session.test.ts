@@ -21,6 +21,27 @@ const held: LyricLine[] = [{ index: 0, text: "hold light", startTime: 1000, endT
   syllables: [{ text: "hold", startTime: 1000, endTime: 3000 }, { text: "light", startTime: 3000, endTime: 5000 }] }];
 const json = (value: unknown) => JSON.stringify(value);
 
+test("保存过程中继续输入保留新草稿，保存基线只推进到已写入版本", () => {
+  const session = new EditSession(track, plain(["Repeat", "Repeat"]));
+  session.setValue(0, "已提交");
+  const pending = session.toEntry();
+  session.setValue(0, "继续输入");
+  session.setValue(1, "另一处重复句");
+  session.markSaved(pending);
+  assert.equal(session.dirty, true);
+  assert.deepEqual(session.values, ["继续输入", "另一处重复句"]);
+  assert.equal(session.saved?.lines[0]?.translatedText, "已提交");
+  session.markSaved(session.toEntry());
+  assert.equal(session.dirty, false);
+});
+
+test("同样的歌词文本但时间或行号变化时不恢复旧定位草稿", () => {
+  const session = new EditSession(track, plain(["Repeat", "Repeat"]));
+  const state = session.snapshot();
+  state.lines[1]!.startTime = 10000;
+  assert.equal(session.fits(state), false);
+});
+
 test("保存保留未改文本的片段对齐，原文或译文改变时清除旧对齐", () => {
   const original = [aligned(0, "One", "第一句"), aligned(1, "Two", "第二句"), aligned(2, "Three", "第三句")];
   const session = new EditSession(track, [{ index: 0, text: "One" }, { index: 1, text: "Two" }, { index: 2, text: "Changed third line" }],

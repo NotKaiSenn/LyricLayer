@@ -47,6 +47,8 @@ export interface LyricSyllable {
 
 export interface LyricLine {
   index: number;
+  /** Native virtual row, including interludes/background vocals; normal/minimal mode. */
+  renderOrder?: [number, number];
   text: string;
   startTime?: number;
   endTime?: number;
@@ -73,9 +75,9 @@ export interface SpicetifyApi {
     data?: { item?: SpicetifyPlayerItem };
     getProgress?: () => number;
     isPlaying?: () => boolean;
-    seek?: (positionMs: number) => void;
-    play?: () => void;
-    pause?: () => void;
+    seek?: (positionMs: number) => void | Promise<void>;
+    play?: () => void | Promise<void>;
+    pause?: () => void | Promise<void>;
     addEventListener?: (event: string, listener: (event?: unknown) => void) => void;
     removeEventListener?: (event: string, listener: (event?: unknown) => void) => void;
   };

@@ -1,12 +1,24 @@
 import { normalizeLyricText } from "./matcher";
 import { textWithoutInjectedTranslation } from "./spicy-lyrics-source";
-import { playbackPosition, TranslationAnimator } from "./translation-animator";
+import { TranslationAnimator } from "./translation-animator";
 import { buildTranslationTiming } from "./translation-timing";
 import { isTranslationAnimationEnabled, TRANSLATION_ANIMATION_EVENT } from "./translation-settings";
 import type { LyricLine, TranslationLine } from "./types";
 
 const LINE_SELECTOR = ".line:not(.musical-line):not(.bg-line)";
 const TRANSLATION_SELECTOR = "[data-lyric-layer-translation]";
+const OWN_SELECTOR = `${TRANSLATION_SELECTOR}, .ll-scope, [data-lyric-layer-button]`;
+
+function ownNode(node: Node): boolean {
+  const element = node.nodeType === 1 ? node as Element : node.parentElement;
+  return !!element?.closest(OWN_SELECTOR);
+}
+
+/** Our text, buttons and animation must never schedule another full render. */
+function nativeMutation(record: MutationRecord): boolean {
+  if (ownNode(record.target)) return false;
+  return record.type !== "childList" || [...record.addedNodes, ...record.removedNodes].some(node => !ownNode(node));
+}
 
 /** While editing, empty lines get a clickable placeholder, one line can show
  * an editor instead of its translation, and a click activates a line. */
@@ -50,6 +62,7 @@ export class TranslationRenderer {
   private onLyricsUiChanged?: () => void;
   private editHooks?: EditHooks;
   private readonly translationClicked = (event: Event) => {
+    event.stopPropagation();
     const element = event.currentTarget as HTMLElement;
     const line = element.parentElement;
     if (!line) return;
@@ -66,8 +79,8 @@ export class TranslationRenderer {
     this.pageObserver = new MutationObserver((records) => {
       // Page/ancestor classes include font and Simple Lyrics mode switches. Do not
       // observe per-frame word styles or run a full render for each animated letter.
-      if (records.some((record) => record.type === "childList"
-        || Array.from(this.roots.keys()).some((root) => (record.target as Element).contains(root)))) this.schedule();
+      if (records.some((record) => nativeMutation(record) && (record.type === "childList"
+        || Array.from(this.roots.keys()).some((root) => (record.target as Element).contains(root))))) this.schedule();
     });
     this.pageObserver.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
   }
@@ -137,8 +150,8 @@ export class TranslationRenderer {
     activeRoots.forEach((root) => {
       if (this.roots.has(root)) return;
       const observer = new MutationObserver((records) => {
-        if (records.some((record) => record.type !== "attributes"
-          || record.target === root || (record.target as Element).matches(LINE_SELECTOR))) this.schedule();
+        if (records.some((record) => nativeMutation(record) && (record.type !== "attributes"
+          || record.target === root || (record.target as Element).matches(LINE_SELECTOR)))) this.schedule();
       });
       observer.observe(root, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ["class", "data-lyrics-type"] });
       this.roots.set(root, observer);
@@ -147,39 +160,48 @@ export class TranslationRenderer {
     return added;
   }
 
-  private resolveLineIndex(element: Element): number | undefined {
+  private resolveLineIndex(element: Element, mounted: Element[]): number | undefined {
     const textKey = normalizeLyricText(textWithoutInjectedTranslation(element));
     if (!textKey) return undefined;
     const candidates = this.lyricLines.filter((line) => normalizeLyricText(line.text) === textKey);
-    const first = candidates[0];
-    if (!first) return undefined;
-    if (candidates.length === 1) return first.index;
-    const position = element.classList.contains("Active") ? playbackPosition() : undefined;
-    if (position !== undefined) {
-      const timed = candidates.find((line) => line.startTime !== undefined && line.endTime !== undefined
-        && position >= line.startTime && position <= line.endTime);
-      if (timed) return timed.index;
-    }
+    // Identity belongs to the source row. Active/Sung and the playback clock
+    // describe its pose, and must never change which occurrence we edit.
     const virtualIndex = Number(element.parentElement?.dataset.index);
-    if (!Number.isFinite(virtualIndex)) return first.index;
-    return candidates.reduce((best, current) =>
-      Math.abs(current.index - virtualIndex) < Math.abs(best.index - virtualIndex) ? current : best
-    , first).index;
+    if (Number.isInteger(virtualIndex) && virtualIndex >= 0) {
+      const mode = element.closest(".MinimalLyricsMode") ? 1 : 0;
+      const exact = candidates.filter(line => (line.renderOrder?.[mode] ?? line.index) === virtualIndex);
+      if (exact.length === 1) return exact[0]!.index;
+    } else if (mounted.length === this.lyricLines.length) {
+      // Older, non-virtualized pages mount the entire source in order.
+      const ordered = this.lyricLines[mounted.indexOf(element)];
+      if (ordered && normalizeLyricText(ordered.text) === textKey) return ordered.index;
+    }
+    // Never guess the nearest repeated sentence: that can attach one editor to
+    // several rows and audition a different timestamp. Unique text is safe.
+    return candidates.length === 1 ? candidates[0]!.index : undefined;
   }
 
   private renderMountedLines(): void {
     const editing = this.editHooks?.editing;
+    let editorMounted = false;
     this.roots.forEach((_observer, root) => {
-      root.querySelectorAll(LINE_SELECTOR).forEach((line) => {
-        const index = this.resolveLineIndex(line);
+      const mounted = Array.from(root.querySelectorAll(LINE_SELECTOR));
+      mounted.forEach((line) => {
+        const index = this.resolveLineIndex(line, mounted);
+        const editHere = editing && !editorMounted && index === editing.index
+          && !root.closest(".Hidden, .HiddenTransitioned, [hidden]");
+        if (editHere) editorMounted = true;
         let existing = line.querySelector(`:scope > ${TRANSLATION_SELECTOR}`) as HTMLElement | null;
-        if (editing?.after && index === editing.index && line.nextElementSibling !== editing.element) {
+        if (editHere && editing.after && line.nextElementSibling !== editing.element) {
           // Outside the line: growing the line box would stretch the gradient
           // that paints its text, and the line must keep previewing the draft.
           line.after(editing.element);
+          // It was just moved out of this line. The old query result must not
+          // be treated as a stale inline editor and remove the expanded panel.
+          if (existing === editing.element) existing = null;
           this.editHooks?.onEditorMounted?.();
         }
-        if (editing && !editing.after && index === editing.index) {
+        if (editHere && !editing.after) {
           if (existing && existing !== editing.element) {
             this.animator.remove(existing);
             existing.remove();
@@ -201,10 +223,10 @@ export class TranslationRenderer {
           if (this.editHooks && index !== undefined) {
             const placeholder = existing?.dataset.llPlaceholder ? existing : this.createTranslation();
             if (placeholder !== existing) existing?.remove();
-            placeholder.className = "lyric-layer-translation ll-placeholder";
+            if (placeholder.className !== "lyric-layer-translation ll-placeholder") placeholder.className = "lyric-layer-translation ll-placeholder";
             placeholder.dataset.llPlaceholder = "true";
             placeholder.dataset.lineIndex = String(index);
-            placeholder.textContent = this.editHooks.placeholder;
+            if (placeholder.textContent !== this.editHooks.placeholder) placeholder.textContent = this.editHooks.placeholder;
             this.builtFrom.delete(placeholder);
             if (placeholder.parentElement !== line) line.appendChild(placeholder);
           } else existing?.remove();
@@ -212,7 +234,7 @@ export class TranslationRenderer {
         }
         const element = existing && !existing.dataset.llPlaceholder ? existing : this.createTranslation();
         if (element !== existing) existing?.remove();
-        element.className = "lyric-layer-translation";
+        if (element.className !== "lyric-layer-translation") element.className = "lyric-layer-translation";
         const source = JSON.stringify(translation);
         if (element.dataset.lineIndex !== String(index) || element.textContent !== translation.translatedText
           || this.builtFrom.get(element) !== source) {

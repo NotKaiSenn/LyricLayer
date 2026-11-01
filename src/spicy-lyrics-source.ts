@@ -23,10 +23,12 @@ interface RawContent {
   StartTime?: number;
   EndTime?: number;
   Lead?: RawLead;
+  Background?: RawLead[];
 }
 
 interface RawLyrics {
   Type?: string;
+  StartTime?: number;
   Lines?: Array<{ Text?: string }>;
   Content?: RawContent[];
 }
@@ -94,20 +96,33 @@ function timedSyllables(syllables: RawSyllable[] | undefined): LyricSyllable[] |
 
 export function extractLyricLines(raw: RawLyrics): LyricLine[] {
   if (raw.Type === "Static" || (raw.Lines && !raw.Content)) {
-    return (raw.Lines ?? []).map((line, index) => ({ index, text: (line.Text ?? "").trim() }));
+    return (raw.Lines ?? []).filter(line => line.Text?.replace(ZERO_WIDTH_CHARACTERS, "").trim())
+      .map((line, index) => ({ index, renderOrder: [index, index], text: (line.Text ?? "").trim() }));
   }
 
   const output: LyricLine[] = [];
-  for (const item of raw.Content ?? []) {
-    if (item.Type === "Instrumental") continue;
+  const hasText = (group: RawLead) => group.Syllables?.some(part => part.Text?.replace(ZERO_WIDTH_CHARACTERS, "").trim());
+  const content = (raw.Content ?? []).filter(item => item.Type !== "Instrumental"
+    && (item.Text?.trim() || item.Lead?.Text?.trim() || (item.Lead && hasText(item.Lead)) || item.Background?.some(hasText)));
+  // These are native *rows*, not translation indices. Spicy inserts a row for
+  // each background vocal and for gaps >= 3s (5s in minimal mode).
+  const slots: [number, number] = [3, 5].map(gap => Number((raw.StartTime ?? 0) >= gap)) as [number, number];
+  for (const [position, item] of content.entries()) {
     const syllables = item.Lead?.Syllables;
     const text = syllables?.length
       ? syllablesToText(syllables)
       : String(item.Text ?? item.Lead?.Text ?? "").replace(ZERO_WIDTH_CHARACTERS, "").trim();
+    const renderOrder: [number, number] = [...slots];
+    const next = content[position + 1];
+    const gap = (next?.Lead?.StartTime ?? next?.StartTime ?? NaN) - (item.Lead?.EndTime ?? item.EndTime ?? NaN);
+    const rows = 1 + (item.Background?.filter(hasText).length ?? 0);
+    slots[0] += rows + Number(gap >= 3);
+    slots[1] += rows + Number(gap >= 5);
     if (!text) continue;
     const timed = timedSyllables(syllables);
     const line: LyricLine = {
       index: output.length,
+      renderOrder,
       text,
       startTime: secondsToMs(item.Lead?.StartTime ?? item.StartTime) ?? timed?.[0]?.startTime,
       endTime: secondsToMs(item.Lead?.EndTime ?? item.EndTime) ?? timed?.[timed.length - 1]?.endTime,
@@ -168,10 +183,11 @@ export function readMountedFallbackLines(root: ParentNode = document): LyricLine
   root.querySelectorAll(selector).forEach((element) => {
     const text = textWithoutInjectedTranslation(element);
     const wrapperIndex = Number(element.parentElement?.dataset.index);
-    const key = `${Number.isFinite(wrapperIndex) ? wrapperIndex : "?"}\u0000${text}`;
-    if (!text || seen.has(key)) return;
-    seen.add(key);
-    output.push({ index: output.length, text });
+    const hasIndex = Number.isInteger(wrapperIndex) && wrapperIndex >= 0;
+    const key = `${wrapperIndex}\u0000${text}`;
+    if (!text || (hasIndex && seen.has(key))) return;
+    if (hasIndex) seen.add(key);
+    output.push({ index: output.length, text, ...(hasIndex ? { renderOrder: [wrapperIndex, wrapperIndex] as [number, number] } : {}) });
   });
   return output;
 }

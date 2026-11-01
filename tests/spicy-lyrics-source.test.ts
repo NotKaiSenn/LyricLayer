@@ -22,13 +22,13 @@ test("逐词歌词合并主声部音节、转成毫秒并忽略 instrumental", (
       },
     ],
   });
-  assert.deepEqual(result, [{ index: 0, text: "I used to rule", startTime: 12_200, endTime: 16_400 }]);
+  assert.deepEqual(result, [{ index: 0, renderOrder: [0, 0], text: "I used to rule", startTime: 12_200, endTime: 16_400 }]);
 });
 
 test("静态歌词保留全部行供编辑器使用", () => {
   assert.deepEqual(extractLyricLines({ Type: "Static", Lines: [{ Text: "One" }, { Text: "Two" }] }), [
-    { index: 0, text: "One" },
-    { index: 1, text: "Two" },
+    { index: 0, renderOrder: [0, 0], text: "One" },
+    { index: 1, renderOrder: [1, 1], text: "Two" },
   ]);
 });
 
@@ -36,7 +36,7 @@ test("读取缓存时清理 Spicy Lyrics 渲染前会移除的零宽字符", () 
   assert.deepEqual(extractLyricLines({ Type: "Line", Content: [
     { Type: "Vocal", Text: "Come\u200B and\u2060 go", StartTime: 1, EndTime: 2 },
   ] }), [
-    { index: 0, text: "Come and go", startTime: 1_000, endTime: 2_000 },
+    { index: 0, renderOrder: [0, 0], text: "Come and go", startTime: 1_000, endTime: 2_000 },
   ]);
 });
 
@@ -47,7 +47,7 @@ test("逐音节时间转换为毫秒并保留词内标记，缺失行时间从�
     { Text: "this", StartTime: 3.1, EndTime: 3.4 },
     { Text: "day", StartTime: 3.4, EndTime: 5 },
   ] } }] }), [{
-    index: 0, text: "remember this day", startTime: 1_235, endTime: 5_000,
+    index: 0, renderOrder: [0, 0], text: "remember this day", startTime: 1_235, endTime: 5_000,
     syllables: [
       { text: "re", startTime: 1_235, endTime: 1_800, isPartOfWord: true },
       { text: "member", startTime: 1_800, endTime: 2_700, isPartOfWord: false },
@@ -90,7 +90,20 @@ test("任意音节时间无效时整组降级，仍保留原文和行时间", ()
       StartTime: 1, EndTime: 4,
       Syllables: [{ Text: "One", StartTime: 1, EndTime: 2 }, { Text: "two", ...timing }],
     } }] });
-    assert.deepEqual(result, [{ index: 0, text: "One two", startTime: 1_000, endTime: 4_000 }]);
+    assert.deepEqual(result, [{ index: 0, renderOrder: [0, 0], text: "One two", startTime: 1_000, endTime: 4_000 }]);
     assert.equal(Object.hasOwn(result[0]!, "syllables"), false);
   }
+});
+
+test("原生行号包含前奏、伴唱与间奏，并区分普通/极简阈值", () => {
+  const lead = (start: number, end: number) => ({ StartTime: start, EndTime: end, Syllables: [{ Text: "Repeat", StartTime: start, EndTime: end }] });
+  const lines = extractLyricLines({ Type: "Syllable", StartTime: 4, Content: [
+    { Lead: lead(4, 5), Background: [lead(4, 5), { Syllables: [{ Text: " " }] }] },
+    { Lead: lead(9, 10) },
+    { Lead: lead(16, 17) },
+  ] });
+  assert.deepEqual(lines.map(line => line.renderOrder), [[1, 0], [4, 2], [6, 4]]);
+  assert.deepEqual(lines.map(line => line.index), [0, 1, 2]);
+  assert.deepEqual(extractLyricLines({ Type: "Static", Lines: [{ Text: " " }, { Text: "Repeat" }, { Text: "Repeat" }] })
+    .map(line => line.renderOrder), [[0, 0], [1, 1]]);
 });
