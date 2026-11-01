@@ -375,8 +375,10 @@ export class TranslationUi {
     else this.activate(position);
   }
 
-  /** Start typing into one line, in place on the page. */
-  private activate(position: number, seek = false): void {
+  /** Start typing into one line, in place on the page. Only a click on the page
+   * seeks (natively): moving between lines by keyboard or the panel never moves
+   * playback, so a paused player is not repeatedly re-seeked. */
+  private activate(position: number): void {
     const session = this.session;
     if (!session || position < 0 || position >= session.size) return;
     const editor = this.inlineEditor();
@@ -385,7 +387,6 @@ export class TranslationUi {
     this.syncEditor();
     this.installHooks();
     this.dependencies.renderNow();
-    if (seek) this.seekTo(position);
     pausePlayback();
     this.focusEditor();
   }
@@ -401,7 +402,7 @@ export class TranslationUi {
     if (this.editing === undefined || !this.session) return;
     const next = this.editing + delta;
     if (next < 0 || next >= this.session.size) return;
-    this.activate(next, true);
+    this.activate(next);
   }
 
   private syncEditor(): void {
@@ -426,22 +427,6 @@ export class TranslationUi {
     }
   }
 
-  /** Move playback to a line the way a click on it would. */
-  private seekTo(position: number): void {
-    const session = this.session;
-    const index = session?.lines[position]?.index;
-    if (!session || index === undefined) return;
-    const marker = this.chrome?.page.querySelector(`[data-lyric-layer-translation][data-line-index="${index}"]`);
-    if (marker?.parentElement) {
-      clickNativeLine(marker.parentElement);
-      return;
-    }
-    const start = session.lyricAt(position).startTime;
-    try {
-      if (start !== undefined) player()?.seek?.(start);
-    } catch { /* The line stays selected even if playback cannot move. */ }
-  }
-
   /** Alignment and animation for one line, in the panel under the page. */
   private openPanel(position: number): void {
     const session = this.session;
@@ -463,7 +448,6 @@ export class TranslationUi {
         session.setLine(position, draft);
         this.changed();
         this.openPanel(position + delta);
-        this.seekTo(position + delta);
       },
     });
   }

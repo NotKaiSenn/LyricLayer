@@ -17,6 +17,8 @@ export interface LinePanel {
 const PRE_ROLL_MS = 1500;
 const POST_ROLL_MS = 600;
 const HIGHLIGHT_INTERVAL_MS = 400;
+// Let the seek settle before resuming, so playback never starts from the old spot.
+const SEEK_SETTLE_MS = 150;
 
 function lineBounds(line: LyricLine): { start: number; end: number } | undefined {
   const start = line.startTime ?? line.syllables?.[0]?.startTime;
@@ -48,6 +50,7 @@ export function createLinePanel(): LinePanel {
   let host: HTMLElement | undefined;
   let resize: ResizeObserver | undefined;
   let audition: { end: number; startedAt: number; length: number } | undefined;
+  let resume: number | undefined;
   const player = () => window.Spicetify?.Player;
 
   const highlight = (scroll = false) => {
@@ -62,6 +65,8 @@ export function createLinePanel(): LinePanel {
   };
 
   const stopAudition = () => {
+    if (resume !== undefined) clearTimeout(resume);
+    resume = undefined;
     if (!audition) return;
     audition = undefined;
     try { player()?.pause?.(); } catch { /* The page stays usable without playback control. */ }
@@ -91,10 +96,16 @@ export function createLinePanel(): LinePanel {
     if (!bounds || !control?.seek) return;
     try {
       const start = Math.max(0, bounds.start - PRE_ROLL_MS);
+      if (control.isPlaying?.()) control.pause?.();
       control.seek(start);
-      control.play?.();
       audition = { end: bounds.end + POST_ROLL_MS, startedAt: performance.now(), length: bounds.end + POST_ROLL_MS - start };
       editor?.setAuditioning(true);
+      resume = window.setTimeout(() => {
+        resume = undefined;
+        if (!audition) return;
+        audition.startedAt = performance.now();
+        try { control.play?.(); } catch { stopAudition(); }
+      }, SEEK_SETTLE_MS);
     } catch {
       audition = undefined;
     }

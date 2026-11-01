@@ -41,7 +41,7 @@ test("点击译文：原生跳转到该句，在原位出现输入框并暂停�
   assert.equal(run.button("保存").disabled, true, "typing back to the saved text is not a change");
 });
 
-test("Enter 跳到下一句并跳转播放位置；Shift+Enter 与输入法组字不拦截；Esc 结束输入", async () => {
+test("Enter 跳到下一句但不移动播放位置；Shift+Enter 与输入法组字不拦截；Esc 结束输入", async () => {
   const run = createUiHarness({ entry, lyrics });
   await run.enter();
   run.clickLine(0);
@@ -50,7 +50,7 @@ test("Enter 跳到下一句并跳转播放位置；Shift+Enter 与输入法组�
   assert.equal(run.key("Enter").defaultPrevented, true);
   assert.equal(run.editingIndex(), 1);
   assert.equal(run.editorInput().value, "二");
-  assert.deepEqual(run.player.seeks, [2000]);
+  assert.deepEqual(run.player.seeks, [], "keyboard moves never re-seek a paused player");
   run.key("Escape");
   assert.equal(run.editingIndex(), undefined);
   assert.ok(run.toolbar(), "Escape only ends typing, not edit mode");
@@ -163,7 +163,7 @@ test("对齐与动画面板：改动实时生效，上一句/下一句连续切�
   assert.equal(run.panel().translation.translatedText, "新的一");
   run.panel().onNavigate!(1, run.panel().translation);
   assert.equal(run.panel().title, "第 2 行");
-  assert.equal(run.player.seeks[run.player.seeks.length - 1], 2000);
+  assert.deepEqual(run.player.seeks, [], "panel navigation does not seek");
   run.clickLine(2);
   assert.equal(run.panel().title, "第 3 行", "clicking another line moves the open panel there");
   run.panel().onClose();
