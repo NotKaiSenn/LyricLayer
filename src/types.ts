@@ -73,6 +73,9 @@ export interface SpicetifyApi {
     data?: { item?: SpicetifyPlayerItem };
     getProgress?: () => number;
     isPlaying?: () => boolean;
+    seek?: (positionMs: number) => void;
+    play?: () => void;
+    pause?: () => void;
     addEventListener?: (event: string, listener: (event?: unknown) => void) => void;
     removeEventListener?: (event: string, listener: (event?: unknown) => void) => void;
   };

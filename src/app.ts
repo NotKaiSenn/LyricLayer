@@ -3,7 +3,7 @@ import { matchTranslations } from "./matcher";
 import { readMountedFallbackLines, readSpicyLyricsLines } from "./spicy-lyrics-source";
 import { IndexedDbTranslationStore } from "./storage";
 import { injectStyles } from "./styles";
-import type { LyricLine, TrackInfo, TranslationEntry } from "./types";
+import type { LyricLine, TrackInfo, TranslationEntry, TranslationLine } from "./types";
 import { TranslationUi } from "./ui";
 
 const BUTTON_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none"><path d="M4 6h12M4 10h9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M5 15h5m-5 4h8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" opacity=".68"/><path d="M18 13v7m-3.5-3.5h7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`;
@@ -37,8 +37,14 @@ class LyricLayerApp {
     getLyrics: () => this.ensureLyrics(true),
     getExportLyrics: readSpicyLyricsLines,
     onEntryChanged: (trackUri) => this.reloadEntry(trackUri),
+    onPreview: (trackUri, lines) => this.preview(trackUri, lines),
+    setEditHooks: (hooks) => this.renderer.setEditHooks(hooks),
+    renderNow: () => this.renderer.renderNow(),
+    onModeChange: (active) => this.syncButtons(active),
   });
   private entry?: TranslationEntry;
+  /** Unsaved lines shown on the page while a line is being edited. */
+  private previewLines?: TranslationLine[];
   private lyrics: LyricLine[] = [];
   private sourceResolved = false;
   private loadGeneration = 0;
@@ -52,6 +58,7 @@ class LyricLayerApp {
     injectStyles();
     this.renderer.start(() => {
       this.insertButtons();
+      this.ui.pageChanged();
       // Player.data can arrive after the initial songchange event. Reconcile the
       // track even when its lyrics cache has already been resolved.
       void this.ensureLyrics(false);
@@ -64,9 +71,11 @@ class LyricLayerApp {
   private loadCurrentTrack(): Promise<void> {
     const track = currentTrack();
     if (this.trackUri === track?.uri && this.trackLoad) return this.trackLoad;
+    if (this.trackUri !== track?.uri) this.ui.trackChanged(track?.uri);
     const generation = ++this.loadGeneration;
     this.trackUri = track?.uri;
     this.entry = undefined;
+    this.previewLines = undefined;
     this.lyrics = [];
     this.sourceResolved = false;
     this.sourceLoad = undefined;
@@ -127,9 +136,16 @@ class LyricLayerApp {
     return loading;
   }
 
-  private render(): void {
-    const map = this.entry ? matchTranslations(this.lyrics, this.entry.lines) : new Map();
-    this.renderer.update(this.lyrics, map);
+  private render(keepDom = false): void {
+    const lines = this.previewLines ?? this.entry?.lines;
+    const map = lines ? matchTranslations(this.lyrics, lines) : new Map();
+    this.renderer.update(this.lyrics, map, keepDom);
+  }
+
+  private preview(trackUri: string, lines: TranslationLine[] | undefined): void {
+    if (trackUri !== this.trackUri || (!lines && !this.previewLines)) return;
+    this.previewLines = lines;
+    this.render(true);
   }
 
   private async reloadEntry(trackUri: string): Promise<void> {
@@ -143,27 +159,37 @@ class LyricLayerApp {
     this.render();
   }
 
+  private syncButtons(active: boolean): void {
+    document.querySelectorAll<HTMLElement>("[data-lyric-layer-button]").forEach((button) => {
+      button.setAttribute("aria-pressed", String(active));
+      button.classList.toggle("ll-active", active);
+    });
+  }
+
   private insertButtons(): void {
     if (this.interfaceScheduled) return;
     this.interfaceScheduled = true;
     queueMicrotask(() => {
       this.interfaceScheduled = false;
-      const controls = document.querySelectorAll("#SpicyLyricsPage .ViewControls, #SpicyLyricsNPVCard .CardControls");
+      // Only the full lyrics page: the Now Playing card is too small to edit in.
+      const controls = document.querySelectorAll("#SpicyLyricsPage:not(.CardMode) .ViewControls");
       controls.forEach((container) => {
         if (container.querySelector("[data-lyric-layer-button]")) return;
         const button = document.createElement("button");
-        button.className = container.classList.contains("CardControls") ? "ViewControl CardControl lyric-layer-control" : "ViewControl lyric-layer-control";
+        button.className = "ViewControl lyric-layer-control";
         button.dataset.lyricLayerButton = "true";
-        button.title = "自定义翻译";
-        button.setAttribute("aria-label", "自定义翻译");
+        button.title = "编辑译文";
+        button.setAttribute("aria-label", "编辑译文");
+        button.setAttribute("aria-pressed", String(this.ui.active));
+        button.classList.toggle("ll-active", this.ui.active);
         button.innerHTML = BUTTON_ICON;
         button.addEventListener("click", (event) => {
           event.preventDefault();
           event.stopPropagation();
-          void this.ui.open();
+          void this.ui.toggle();
         });
         try {
-          window.Spicetify?.Tippy?.(button, { ...(window.Spicetify.TippyProps ?? {}), content: "自定义翻译" });
+          window.Spicetify?.Tippy?.(button, { ...(window.Spicetify.TippyProps ?? {}), content: "编辑译文" });
         } catch { /* native title remains as fallback */ }
         const romanization = container.querySelector("#RomanizationToggle");
         if (romanization) romanization.insertAdjacentElement("afterend", button);

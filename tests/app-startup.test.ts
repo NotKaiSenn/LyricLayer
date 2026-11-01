@@ -19,7 +19,12 @@ const stubs: Record<string, string> = {
   "spicy-lyrics-source": `export const readSpicyLyricsLines = uri => window.harness.readLyrics(uri);
     export const readMountedFallbackLines = () => [];`,
   "styles": `export const injectStyles = () => {};`,
-  "ui": `export class TranslationUi { constructor(options) { window.harness.uiOptions = options; } }`,
+  "ui": `export class TranslationUi {
+    constructor(options) { window.harness.uiOptions = options; window.harness.trackChanges = []; }
+    get active() { return false; }
+    trackChanged(uri) { window.harness.trackChanges.push(uri); }
+    pageChanged() {}
+  }`,
 };
 const bundle = await build({
   entryPoints: [fileURLToPath(new URL("../src/app.ts", import.meta.url))],
@@ -79,6 +84,7 @@ async function harness() {
     uiChanged: () => context.window.harness.uiChanged(),
     songChanged: () => h.songChanged(),
     latest: () => context.window.harness.latest,
+    trackChanges: () => (context.window.harness as unknown as { trackChanges: string[] }).trackChanges,
     setTrack: (uri?: string) => { player.data.item = uri ? { uri, name: uri } : undefined; },
   };
 }
@@ -123,6 +129,7 @@ test("切歌时旧歌延迟返回不会覆盖新歌，已resolved的UI仍校准�
   await settle();
   assert.equal(run.latest()[0]?.originalText, uriB);
   assert.deepEqual(run.h.lyricRequests, [uriB]);
+  assert.deepEqual([...run.trackChanges()], [uriA, uriB], "edit mode hears about every song change");
 
   run.h.readEntry = async (uri) => entry(uri);
   run.setTrack(uriA);

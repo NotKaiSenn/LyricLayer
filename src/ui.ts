@@ -1,11 +1,11 @@
-import { matchTranslations } from "./matcher";
-import { exportLyrics, type LyricExportMode } from "./lyric-export";
-import { parseJson, parseLrc, parseTxt } from "./parsers";
+import { clickNativeLine, lyricsPage, type EditHooks } from "./dom-renderer";
+import { EditSession, exportChoices, type DraftState } from "./edit-session";
+import { createLinePanel, type LinePanel } from "./line-panel";
 import type { TranslationStore } from "./storage";
 import { isTranslationAnimationEnabled, setTranslationAnimationEnabled } from "./translation-settings";
-import { createVisualEditor } from "./visual-editor";
-import { validateVisualTranslation } from "./translation-timing";
-import type { LyricLine, TrackInfo, TranslationEntry, TranslationLine } from "./types";
+import type { LyricLine, TrackInfo, TranslationLine } from "./types";
+import { button, choiceDialog, chooseFile, confirmDialog, downloadFile, element, iconButton, ICONS, menu,
+  notify, switchControl, type MenuContent } from "./ui-kit";
 
 interface UiDependencies {
   store: TranslationStore;
@@ -13,543 +13,578 @@ interface UiDependencies {
   getLyrics: () => Promise<LyricLine[]>;
   getExportLyrics: (trackUri: string) => Promise<LyricLine[]>;
   onEntryChanged: (trackUri: string) => Promise<void>;
+  /** Show unsaved lines on the lyrics page, or undefined to show the saved ones. */
+  onPreview: (trackUri: string, lines: TranslationLine[] | undefined) => void;
+  setEditHooks: (hooks: EditHooks | undefined) => void;
+  renderNow: () => void;
+  onModeChange?: (active: boolean) => void;
 }
 
-interface SpicyModalElement extends HTMLElement {
-  display(options: {
-    title: string;
-    content: HTMLElement;
-    isLarge?: boolean;
-    modalId?: string;
-  }): void;
-  transition?(options: {
-    title?: string;
-    content: HTMLElement;
-    modalId?: string;
-  }): void;
-  hide(): void;
+const PLACEHOLDER = "点击输入译文";
+
+interface Chrome {
+  page: HTMLElement;
+  root: HTMLElement;
+  progress: HTMLElement;
+  status: HTMLElement;
+  save: HTMLButtonElement;
+  banner: HTMLElement;
 }
 
-function notify(message: string, isError = false): void {
-  if (window.Spicetify?.showNotification) window.Spicetify.showNotification(message, isError, 4_000);
-  else console[isError ? "error" : "info"](`LyricLayer: ${message}`);
+interface InlineEditor {
+  root: HTMLElement;
+  input: HTMLTextAreaElement;
+  /** The plain field: the textarea and its "对齐与动画" button. */
+  plain: HTMLElement[];
 }
 
-function button(label: string, className = "", icon = ""): HTMLButtonElement {
-  const element = document.createElement("button");
-  element.type = "button";
-  element.className = `lyric-layer-button ${className}`.trim();
-  if (icon) {
-    const iconElement = document.createElement("span");
-    iconElement.className = "lyric-layer-button-icon";
-    iconElement.innerHTML = icon;
-    element.appendChild(iconElement);
-  }
-  const labelElement = document.createElement("span");
-  labelElement.textContent = label;
-  element.appendChild(labelElement);
-  return element;
+function player() {
+  return window.Spicetify?.Player;
 }
 
-function sectionTitle(label: string): HTMLParagraphElement {
-  const element = document.createElement("p");
-  element.className = "lyric-layer-section-title";
-  element.textContent = label;
-  return element;
+function pausePlayback(): void {
+  try {
+    if (player()?.isPlaying?.()) player()?.pause?.();
+  } catch { /* Editing still works without playback control. */ }
 }
-
-function settingRow(label: string, description: string, control: HTMLElement, className = ""): HTMLDivElement {
-  const row = document.createElement("div");
-  row.className = `lyric-layer-setting-row ${className}`.trim();
-  const copy = document.createElement("div");
-  copy.className = "lyric-layer-setting-copy";
-  const title = document.createElement("span");
-  title.className = "lyric-layer-setting-label";
-  title.textContent = label;
-  const detail = document.createElement("span");
-  detail.className = "lyric-layer-setting-description";
-  detail.textContent = description;
-  copy.append(title, detail);
-  const action = document.createElement("div");
-  action.className = "lyric-layer-setting-control";
-  action.appendChild(control);
-  row.append(copy, action);
-  return row;
-}
-
-const ICONS = {
-  upload: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M5 15.5V19h14v-3.5"/></svg>',
-  edit: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.7 5.3 4 4M5 19l3.9-.8L19 7.1 16.9 5 5.8 15.1 5 19Z"/></svg>',
-  download: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v12m0 0 4.5-4.5M12 16l-4.5-4.5M5 19h14"/></svg>',
-  trash: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/></svg>',
-  back: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 5-7 7 7 7"/></svg>',
-  save: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h12l2 2v14H5V4Zm3 0v6h8V4M8 20v-6h8v6"/></svg>',
-};
 
 function resizeTextarea(input: HTMLTextAreaElement): void {
   input.style.height = "auto";
-  input.style.height = `${Math.max(42, input.scrollHeight)}px`;
+  input.style.height = `${Math.max(32, input.scrollHeight)}px`;
 }
 
-function canonicalize(lines: TranslationLine[], lyrics: LyricLine[], allowUnboundAlignment = false): TranslationLine[] {
-  if (!lyrics.length) return lines;
-  const matches = matchTranslations(lyrics, lines);
-  return lyrics.map((lyric) => {
-    const saved = matches.get(lyric.index);
-    const alignment = saved?.alignment && (saved.originalText === lyric.text
-      || (allowUnboundAlignment && saved.originalText === undefined)) ? saved.alignment : undefined;
-    return {
-      index: lyric.index,
-      startTime: lyric.startTime,
-      originalText: lyric.text,
-      translatedText: saved?.translatedText ?? "",
-      ...(alignment ? { alignment } : {}),
-      ...(saved?.motion ? { motion: { ...saved.motion } } : {}),
-    };
-  });
-}
-
-function entryFrom(track: TrackInfo, lines: TranslationLine[], existing?: TranslationEntry): TranslationEntry {
-  const now = Date.now();
-  return {
-    version: 1,
-    trackUri: track.uri,
-    title: track.title,
-    artist: track.artist,
-    lines,
-    createdAt: existing?.createdAt ?? now,
-    updatedAt: now,
-  };
-}
-
-async function chooseFile(accept: string): Promise<File | undefined> {
-  return new Promise((resolve) => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = accept;
-    input.hidden = true;
-    input.addEventListener("change", () => resolve(input.files?.[0]), { once: true });
-    input.addEventListener("cancel", () => resolve(undefined), { once: true });
-    input.click();
-  });
-}
-
-function downloadJson(entry: TranslationEntry): void {
-  const uriParts = entry.trackUri.split(":");
-  const trackId = uriParts[uriParts.length - 1] ?? "track";
-  downloadFile(`${JSON.stringify(entry, null, 2)}\n`, `lyric-layer-${trackId}.json`, "application/json");
-}
-
-function downloadFile(text: string, filename: string, mimeType = "text/plain"): void {
-  const blob = new Blob([text], { type: `${mimeType};charset=utf-8` });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1_000);
-}
-
-function lyricFilename(track: TrackInfo, mode: LyricExportMode, extension: string): string {
-  const name = Array.from(`${track.artist} - ${track.title}`
-    .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "_")
-    .trim())
-    .slice(0, 60)
-    .join("")
-    .replace(/[. ]+$/, "");
-  return `${name || "lyrics"} - ${mode.startsWith("translation") ? "翻译" : "原文"}.${extension}`;
-}
-
+/** Edit mode turns the Spicy Lyrics page itself into the editor: translations
+ * are typed under their lines, and the page shows the draft as it will play. */
 export class TranslationUi {
-  private modal?: SpicyModalElement;
+  private session?: EditSession;
+  private chrome?: Chrome;
+  private editor?: InlineEditor;
+  /** Position of the line being typed into, if any. */
+  private editing?: number;
+  private panel?: LinePanel;
+  private panelPosition?: number;
+  private drafts = new Map<string, DraftState>();
+  private busy = false;
+  private saving = false;
+  private cleanups: Array<() => void> = [];
 
   constructor(private dependencies: UiDependencies) {}
 
-  private displayModal(title: string, content: HTMLElement, transition = false): void {
-    const ModalConstructor = window.customElements?.get("sl-generic-modal") as (new () => SpicyModalElement) | undefined;
-    if (ModalConstructor) {
-      if (transition && this.modal?.isConnected && this.modal.transition) {
-        this.modal.transition({ title, content, modalId: "lyricLayer" });
+  get active(): boolean {
+    return !!this.session;
+  }
+
+  async toggle(): Promise<void> {
+    if (this.session) await this.exit();
+    else await this.enter();
+  }
+
+  async enter(): Promise<void> {
+    // A second click while the lyrics are still loading must not start twice.
+    if (this.session || this.busy) return;
+    this.busy = true;
+    try {
+      const track = this.dependencies.getTrack();
+      if (!track?.uri) {
+        notify("当前没有正在播放的 Spotify 歌曲", true);
         return;
       }
-      if (this.modal?.isConnected) this.modal.hide();
-      // Spicy Lyrics constructs its modal class directly. Calling createElement here
-      // throws in Chromium because the custom element constructor adds a class.
-      const modal = new ModalConstructor();
-      this.modal = modal;
-      modal.display({ title, content, isLarge: true, modalId: "lyricLayer" });
-      return;
-    }
-    const popup = window.Spicetify?.PopupModal;
-    if (!popup) throw new Error("弹窗组件尚未就绪");
-    popup.display({ title, content, isLarge: true });
-  }
-
-  private hideModal(): void {
-    if (this.modal?.isConnected) this.modal.hide();
-    else window.Spicetify?.PopupModal?.hide?.();
-  }
-
-  async open(transition = false): Promise<void> {
-    const track = this.dependencies.getTrack();
-    if (!track?.uri) {
-      notify("当前没有可用的 Spotify Track URI", true);
-      return;
-    }
-    const entry = await this.dependencies.store.get(track.uri);
-    const root = document.createElement("div");
-    root.className = "lyric-layer-panel";
-
-    const trackBox = document.createElement("div");
-    trackBox.className = "lyric-layer-track";
-    const cover = document.createElement("img");
-    cover.className = "lyric-layer-cover";
-    cover.alt = "";
-    if (track.coverUrl) cover.src = track.coverUrl;
-    const details = document.createElement("div");
-    details.className = "lyric-layer-track-details";
-    const title = document.createElement("div");
-    title.className = "lyric-layer-track-title";
-    title.textContent = track.title;
-    const artist = document.createElement("div");
-    artist.className = "lyric-layer-track-sub";
-    artist.textContent = track.artist;
-    const uri = document.createElement("div");
-    uri.className = "lyric-layer-uri";
-    uri.textContent = track.uri;
-    const status = document.createElement("span");
-    const savedLineCount = entry?.lines.filter((line) => line.translatedText.trim()).length ?? 0;
-    status.className = `lyric-layer-status${entry ? " active" : ""}`;
-    status.textContent = entry ? `已启用 · ${savedLineCount} 行` : "尚未添加翻译";
-    details.append(title, artist, uri);
-    trackBox.append(cover, details, status);
-
-    const txtButton = button("选择文件", "secondary", ICONS.upload);
-    const lrcButton = button("选择文件", "secondary", ICONS.upload);
-    const jsonButton = button("选择文件", "secondary", ICONS.upload);
-    const editButton = button(entry ? "继续编辑" : "开始编辑", "primary", ICONS.edit);
-    const lyricsExportButton = button("选择格式", "secondary", ICONS.download);
-    const exportButton = button("导出", "secondary", ICONS.download);
-    const deleteButton = button("删除", "danger", ICONS.trash);
-
-    const option = document.createElement("label");
-    option.className = "lyric-layer-toggle";
-    const preserveEmpty = document.createElement("input");
-    preserveEmpty.type = "checkbox";
-    const toggleTrack = document.createElement("span");
-    toggleTrack.className = "lyric-layer-toggle-track";
-    option.append(preserveEmpty, toggleTrack);
-
-    const animationOption = document.createElement("label");
-    animationOption.className = "lyric-layer-toggle";
-    const animationEnabled = document.createElement("input");
-    animationEnabled.type = "checkbox";
-    animationEnabled.checked = isTranslationAnimationEnabled();
-    animationEnabled.setAttribute("aria-label", "译文动态跟随");
-    animationEnabled.addEventListener("change", () => setTranslationAnimationEnabled(animationEnabled.checked));
-    const animationTrack = document.createElement("span");
-    animationTrack.className = "lyric-layer-toggle-track";
-    animationOption.append(animationEnabled, animationTrack);
-
-    root.append(
-      trackBox,
-      sectionTitle("显示效果"),
-      settingRow("译文动态跟随", "跟随原歌词动画。", animationOption),
-      sectionTitle("添加翻译"),
-      settingRow("TXT 文件", "每一行对应一行原歌词，适合纯文本翻译。", txtButton),
-      settingRow("保留 TXT 空行", "开启后，空白行也会占用一个歌词位置。", option),
-      settingRow("LRC 文件", "根据时间戳自动匹配原歌词。", lrcButton),
-      settingRow("LyricLayer JSON", "导入之前导出的完整翻译备份。", jsonButton),
-      sectionTitle("编辑与管理"),
-      settingRow("逐行编辑", "编辑译文、对齐与动画。", editButton),
-      settingRow("导出歌词", "导出原文或翻译，用于制作翻译和歌词投稿。", lyricsExportButton),
-      settingRow("导出备份", "将当前歌曲翻译导出为可再次导入的 JSON。", exportButton),
-      settingRow("删除本地翻译", "只删除当前歌曲保存在此设备上的翻译。", deleteButton, "danger"),
-    );
-
-    const importFile = async (kind: "txt" | "lrc" | "json") => {
-      try {
-        const file = await chooseFile(kind === "txt" ? ".txt,text/plain" : kind === "lrc" ? ".lrc,text/plain" : ".json,application/json");
-        if (!file) return;
-        const text = await file.text();
-        const lyrics = await this.dependencies.getLyrics();
-        if (kind === "json") {
-          const parsed = parseJson(text);
-          let targetTrack = track;
-          if (parsed.trackUri && parsed.trackUri !== track.uri) {
-            const accepted = window.confirm(`JSON 属于 ${parsed.trackUri}，是否按该 URI 导入？`);
-            if (!accepted) return;
-            targetTrack = { ...track, uri: parsed.trackUri };
-          }
-          const previous = await this.dependencies.store.get(targetTrack.uri);
-          const imported = parsed.entry
-            ? { ...parsed.entry, lines: parsed.lines, trackUri: targetTrack.uri, updatedAt: Date.now() }
-            : entryFrom(targetTrack, targetTrack.uri === track.uri ? canonicalize(parsed.lines, lyrics, true) : parsed.lines, previous);
-          if (targetTrack.uri === track.uri) {
-            const matches = matchTranslations(lyrics, imported.lines);
-            for (const lyric of lyrics) {
-              const line = matches.get(lyric.index);
-              if (!line?.alignment?.some(part => part.startTime !== undefined || part.endTime !== undefined) && !line?.motion) continue;
-              const error = validateVisualTranslation(lyric, line!);
-              if (error) throw new Error(`第 ${lyric.index + 1} 行：${error}`);
-            }
-          }
-          await this.dependencies.store.save(imported);
-          await this.dependencies.onEntryChanged(targetTrack.uri);
-          notify(`已导入 ${imported.lines.length} 行 JSON 翻译`);
-        } else {
-          const parsed = kind === "txt" ? parseTxt(text, preserveEmpty.checked) : parseLrc(text);
-          const imported = entryFrom(track, canonicalize(parsed, lyrics), entry);
-          await this.dependencies.store.save(imported);
-          await this.dependencies.onEntryChanged(track.uri);
-          notify(`已导入 ${parsed.length} 行 ${kind.toUpperCase()} 翻译`);
-        }
-        this.hideModal();
-      } catch (error) {
-        notify(error instanceof Error ? error.message : "导入失败", true);
+      const page = lyricsPage();
+      if (!page) {
+        notify("请在 Spicy Lyrics 的完整歌词页里编辑译文", true);
+        return;
       }
-    };
+      const [lyrics, saved] = await Promise.all([this.dependencies.getLyrics(), this.dependencies.store.get(track.uri)]);
+      if (this.dependencies.getTrack()?.uri !== track.uri) return;
+      if (!lyrics.length) {
+        notify("还没有取得这首歌的原歌词，请等歌词加载完成后再试", true);
+        return;
+      }
+      const session = new EditSession(track, lyrics, saved);
+      this.session = session;
+      this.mountChrome(page);
+      const draft = this.drafts.get(track.uri);
+      if (draft && session.fits(draft)) {
+        const clean = session.snapshot();
+        session.restore(draft);
+        this.showBanner("已恢复上次未保存的修改", { label: "放弃修改", run: () => {
+          session.restore(clean);
+          this.syncEditor();
+          this.changed();
+        } });
+      } else this.drafts.delete(track.uri);
+      this.installHooks();
+      this.changed();
+      this.dependencies.onModeChange?.(true);
+    } finally {
+      this.busy = false;
+    }
+  }
 
-    txtButton.addEventListener("click", () => void importFile("txt"));
-    lrcButton.addEventListener("click", () => void importFile("lrc"));
-    jsonButton.addEventListener("click", () => void importFile("json"));
-    editButton.addEventListener("click", () => void this.openEditor(track));
-    lyricsExportButton.addEventListener("click", async () => {
-      lyricsExportButton.disabled = true;
+  async exit(): Promise<void> {
+    const session = this.session;
+    if (!session || this.busy) return;
+    if (session.dirty) {
+      this.busy = true;
+      let choice: "save" | "discard" | "stay";
       try {
-        await this.openLyricsExport(track);
-      } catch (error) {
-        notify(error instanceof Error ? error.message : "读取歌词失败", true);
+        choice = await choiceDialog({
+          title: "保存修改吗？",
+          message: "退出编辑前，还有未保存的修改。",
+          cancel: "stay",
+          focus: "save",
+          choices: [
+            { value: "discard", label: "放弃修改", tone: "danger" },
+            { value: "stay", label: "继续编辑" },
+            { value: "save", label: "保存并退出", tone: "primary" },
+          ],
+        });
       } finally {
-        lyricsExportButton.disabled = false;
+        this.busy = false;
       }
-    });
-    exportButton.disabled = !entry;
-    exportButton.addEventListener("click", () => { if (entry) downloadJson(entry); });
-    deleteButton.disabled = !entry;
-    deleteButton.addEventListener("click", async () => {
-      if (!entry || !window.confirm("确定删除当前歌曲的本地翻译吗？")) return;
-      await this.dependencies.store.delete(track.uri);
-      await this.dependencies.onEntryChanged(track.uri);
-      this.hideModal();
-      notify("已删除当前歌曲的翻译");
-    });
-
-    this.displayModal("自定义翻译", root, transition);
+      if (this.session !== session || choice === "stay") return;
+      if (choice === "save" && !(await this.save())) return;
+      if (choice === "discard") this.drafts.delete(session.track.uri);
+    }
+    this.teardown();
   }
 
-  private async openLyricsExport(track: TrackInfo): Promise<void> {
-    const [lyrics, entry] = await Promise.all([
-      this.dependencies.getExportLyrics(track.uri),
-      this.dependencies.store.get(track.uri),
-    ]);
-    const savedLines = entry?.lines ?? [];
-    const originalLines = lyrics.length
-      ? lyrics.map((line) => ({ originalText: line.text, startTime: line.startTime, translatedText: "" }))
-      : savedLines;
-    const matches = matchTranslations(lyrics, savedLines);
-    // Keep every saved translation, even if the current provider has different
-    // lines or only static lyrics. Missing source timing must not erase saved timing.
-    const translationLines = savedLines.map((line) => ({
-      ...line,
-      startTime: lyrics.find((lyric) => matches.get(lyric.index) === line)?.startTime ?? line.startTime,
-    }));
-    const root = document.createElement("div");
-    root.className = "lyric-layer-panel";
-    const toolbar = document.createElement("div");
-    toolbar.className = "lyric-layer-editor-toolbar";
-    const back = button("返回", "quiet", ICONS.back);
-    back.addEventListener("click", () => void this.open(true));
-    toolbar.appendChild(back);
-    const description = document.createElement("p");
-    description.className = "lyric-layer-export-description";
-    description.textContent = lyrics.length
-      ? "导出 Spicy Lyrics 的主歌词；翻译使用已保存的内容。"
-      : entry?.lines.length
-        ? "当前原歌词暂不可用，使用已保存的歌词内容导出。"
-        : "还没有取得原歌词，请先打开 Spicy Lyrics 歌词页，等待加载完成后重试。";
-    root.append(toolbar, description);
-
-    const formats: Array<{ mode: LyricExportMode; label: string; description: string }> = [
-      { mode: "original", label: "仅原文", description: "纯文本，每行一句，方便对照原文制作翻译。" },
-      { mode: "original-timed", label: "原文带时间戳", description: "保留原歌词时间轴，格式为 [00:30.660]原文。" },
-      { mode: "translation", label: "仅翻译", description: "纯文本，只包含已填写的译文，跳过未翻译行。" },
-      { mode: "translation-timed", label: "翻译带时间戳", description: "译文沿用对应原歌词的时间戳，跳过未翻译行。" },
-    ];
-    for (const format of formats) {
-      if (format.mode === "original") root.appendChild(sectionTitle("原文"));
-      if (format.mode === "translation") root.appendChild(sectionTitle("翻译"));
-      const exportButton = button(format.mode.endsWith("-timed") ? "导出 LRC" : "导出 TXT", "secondary", ICONS.download);
-      exportButton.setAttribute("aria-label", `导出${format.label}`);
-      let detail = format.description;
-      try {
-        const result = exportLyrics(format.mode.startsWith("translation") ? translationLines : originalLines, format.mode);
-        exportButton.addEventListener("click", () => {
-          try {
-            downloadFile(result.text, lyricFilename(track, format.mode, result.extension));
-            notify(`已导出 ${result.lineCount} 行${format.label}`);
-          } catch (error) {
-            notify(error instanceof Error ? error.message : "导出失败", true);
-          }
-        });
-      } catch (error) {
-        exportButton.disabled = true;
-        detail = error instanceof Error ? error.message : "当前没有可导出的歌词";
-      }
-      root.appendChild(settingRow(format.label, detail, exportButton));
-    }
-    this.displayModal(`导出歌词 · ${track.title}`, root, true);
+  /** The lyrics page was closed or switched to the small card: leave edit mode,
+   * keeping unsaved work for next time. */
+  pageChanged(): void {
+    const session = this.session;
+    const page = this.chrome?.page;
+    if (!session || !page || (page.isConnected && page === lyricsPage())) return;
+    const dirty = session.dirty;
+    this.teardown();
+    notify(dirty ? "歌词页已关闭，未保存的修改已暂存，下次进入编辑模式时可以恢复" : "歌词页已关闭，编辑模式已退出");
   }
 
-  private async openEditor(track: TrackInfo): Promise<void> {
-    const [lyrics, existing] = await Promise.all([
-      this.dependencies.getLyrics(),
-      this.dependencies.store.get(track.uri),
-    ]);
-    const editorLines: TranslationLine[] = lyrics.length
-      ? canonicalize(existing?.lines ?? [], lyrics)
-      : (existing?.lines ?? []).map((line, index) => ({ ...line, index: line.index ?? index }));
-    if (!editorLines.length) {
-      notify("还没有取得原歌词。请先打开 Spicy Lyrics 歌词页，再重试。", true);
-      return;
-    }
+  /** The song changed: leave edit mode, keeping unsaved work for next time. */
+  trackChanged(trackUri: string | undefined): void {
+    const session = this.session;
+    if (!session || session.track.uri === trackUri) return;
+    const dirty = session.dirty;
+    this.teardown();
+    notify(dirty ? "已切换歌曲，未保存的修改已暂存，回到这首歌时可以恢复" : "已切换歌曲，编辑模式已退出");
+  }
 
-    const root = document.createElement("div");
-    root.className = "lyric-layer-panel lyric-layer-editor";
-    const toolbar = document.createElement("div");
-    toolbar.className = "lyric-layer-editor-toolbar";
-    const back = button("返回", "quiet", ICONS.back);
-    back.addEventListener("click", () => void this.open(true));
-    const progress = document.createElement("span");
-    progress.className = "lyric-layer-editor-progress";
-    const updateProgress = () => {
-      progress.textContent = `已填写 ${inputs.filter((input) => input.value.trim()).length} / ${editorLines.length} 行`;
+  private teardown(): void {
+    const session = this.session;
+    if (!session) return;
+    this.closePanel();
+    this.editing = undefined;
+    this.cleanups.splice(0).forEach((cleanup) => cleanup());
+    this.chrome?.page.classList.remove("ll-edit-mode");
+    this.chrome?.root.remove();
+    this.chrome = undefined;
+    this.session = undefined;
+    this.dependencies.setEditHooks(undefined);
+    this.dependencies.onPreview(session.track.uri, undefined);
+    this.dependencies.onModeChange?.(false);
+  }
+
+  private installHooks(): void {
+    const session = this.session;
+    if (!session) return;
+    const editor = this.editing === undefined ? undefined : this.inlineEditor();
+    const index = this.editing === undefined ? undefined : session.lines[this.editing]?.index;
+    this.dependencies.setEditHooks({
+      placeholder: PLACEHOLDER,
+      editing: editor && index !== undefined
+        ? { index, element: editor.root, after: this.panelPosition !== undefined } : undefined,
+      onActivate: (lyricIndex, line) => this.activateFromPage(lyricIndex, line),
+      // Spicy re-created the row: give focus back, but never move the page for it.
+      onEditorMounted: () => this.focusEditor(false),
+    });
+  }
+
+  /** After every change: progress, save state, the stored draft and the page preview. */
+  private changed(): void {
+    const session = this.session;
+    const chrome = this.chrome;
+    if (!session || !chrome) return;
+    const dirty = session.dirty;
+    chrome.progress.textContent = `已翻译 ${session.filled()} / ${session.size} 行`;
+    chrome.status.dataset.dirty = String(dirty);
+    chrome.status.textContent = dirty ? "未保存" : "已保存";
+    chrome.save.disabled = !dirty || this.saving;
+    if (dirty) this.drafts.set(session.track.uri, session.snapshot());
+    else this.drafts.delete(session.track.uri);
+    this.dependencies.onPreview(session.track.uri, session.buildLines());
+  }
+
+  private mountChrome(page: HTMLElement): void {
+    const root = element("div", "ll-scope ll-toolbar-wrap");
+    const toolbar = element("div", "ll-toolbar");
+    toolbar.setAttribute("role", "toolbar");
+    toolbar.setAttribute("aria-label", "编辑译文");
+    const progress = element("span", "ll-toolbar-progress");
+    const importButton = button("导入", "small", ICONS.upload);
+    importButton.title = "从 TXT、LRC 或 LyricLayer JSON 导入，格式自动识别";
+    importButton.addEventListener("click", () => void this.importFile());
+    const exportTrigger = button("导出", "small", ICONS.download);
+    const moreTrigger = iconButton("更多", ICONS.more, "small");
+    const status = element("span", "ll-toolbar-status");
+    const save = button("保存", "small primary");
+    save.title = "Ctrl/Cmd + S";
+    save.addEventListener("click", () => void this.save());
+    const exit = button("退出编辑", "small", ICONS.close);
+    exit.addEventListener("click", () => void this.exit());
+    toolbar.append(element("span", "ll-toolbar-title", "编辑译文"), progress,
+      element("span", "ll-toolbar-separator"), importButton, menu(exportTrigger, () => this.exportEntries()),
+      menu(moreTrigger, () => this.moreEntries()), element("span", "ll-toolbar-separator"), status, save, exit);
+    const banner = element("div", "ll-banner");
+    banner.hidden = true;
+    banner.setAttribute("role", "status");
+    root.append(toolbar, banner);
+    page.classList.add("ll-edit-mode");
+    if (getComputedStyle(page).position === "static") page.classList.add("ll-panel-host");
+    page.appendChild(root);
+    this.chrome = { page, root, progress, status, save, banner };
+
+    // Spicy's own view controls move between layouts (top, bottom, inside the
+    // Now Bar) and sit above everything. Keep the toolbar clear of them.
+    const place = () => {
+      const controls = page.querySelector<HTMLElement>(".ViewControls");
+      const area = controls?.getBoundingClientRect?.();
+      const own = root.getBoundingClientRect?.();
+      const base = page.getBoundingClientRect?.();
+      let top = 14;
+      if (area && own && base && area.width && area.height) {
+        // Test the default spot, not wherever the toolbar is (or is animating) now.
+        const ownTop = base.top + top;
+        const overlaps = area.left < own.right + 8 && area.right > own.left - 8
+          && area.top < ownTop + own.height + 8 && area.bottom > ownTop - 8;
+        if (overlaps) top = Math.round(area.bottom - base.top + 10);
+      }
+      root.style.top = `${top}px`;
     };
-    toolbar.append(back, progress);
-    root.appendChild(toolbar);
-    const head = document.createElement("div");
-    head.className = "lyric-layer-editor-head";
-    head.innerHTML = "<span>#</span><span>原歌词（只读）</span><span>中文翻译</span>";
-    root.appendChild(head);
-    const inputs: HTMLTextAreaElement[] = [];
-    const visuallyEdited = new Set<number>();
-    editorLines.forEach((line, position) => {
-      const row = document.createElement("div");
-      row.className = "lyric-layer-editor-row";
-      const index = document.createElement("div");
-      index.className = "lyric-layer-editor-index";
-      index.textContent = String(position + 1);
-      const original = document.createElement("div");
-      original.className = "lyric-layer-original";
-      original.textContent = line.originalText ?? lyrics[position]?.text ?? "—";
-      const input = document.createElement("textarea");
-      input.className = "lyric-layer-input";
-      input.rows = 1;
-      input.value = line.translatedText;
-      input.placeholder = "输入中文翻译";
-      input.addEventListener("input", () => {
-        resizeTextarea(input);
-        updateProgress();
-      });
-      input.addEventListener("paste", (event) => {
-        const text = event.clipboardData?.getData("text/plain") ?? "";
-        if (!/[\r\n]/.test(text)) return;
-        event.preventDefault();
-        let rows = text.replace(/\r\n?/g, "\n").split("\n");
-        if (rows[rows.length - 1] === "") rows = rows.slice(0, -1);
-        rows.forEach((value, offset) => {
-          const target = inputs[position + offset];
-          if (!target) return;
-          target.value = value;
-          resizeTextarea(target);
-        });
-        updateProgress();
-      });
-      inputs.push(input);
-      const translationCell = document.createElement("div");
-      translationCell.className = "lyric-layer-editor-translation";
-      const visual = button("可视化编辑", "quiet");
-      visual.setAttribute("aria-label", `可视化编辑第 ${position + 1} 行`);
-      visual.addEventListener("click", () => {
-        const current = editorLines[position]!;
-        const translatedText = input.value;
-        const { alignment, ...rest } = current;
-        const draft: TranslationLine = { ...rest, translatedText,
-          ...(alignment && translatedText === current.translatedText ? { alignment } : {}) };
-        const source = lyrics.find(lyric => lyric.index === current.index)
-          ?? { index: current.index ?? position, text: current.originalText ?? "", startTime: current.startTime };
-        const restoreEditor = () => {
-          // Reuse the existing form and its unsaved values, but give it a fresh
-          // modal scroller instead of inheriting the visual editor's position.
-          this.displayModal(`编辑翻译 · ${track.title}`, root);
-          inputs.forEach(resizeTextarea);
-          updateProgress();
-          visual.focus?.({ preventScroll: true });
-          row.scrollIntoView?.({ block: "center", inline: "nearest", behavior: "auto" });
-        };
-        const visualEditor = createVisualEditor({ line: source, translation: draft,
-          onApply: next => {
-            editorLines[position] = { ...next, index: current.index,
-              originalText: current.originalText, startTime: current.startTime };
-            visuallyEdited.add(position);
-            input.value = next.translatedText;
-            restoreEditor();
-          }, onClose: restoreEditor });
-        // Spicy's transition retains the old scrollTop (and can mount content
-        // asynchronously). A fresh modal always opens this new view at the top.
-        this.displayModal(`可视化编辑 · 第 ${position + 1} 行`, visualEditor);
-      });
-      translationCell.append(input, visual);
-      row.append(index, original, translationCell);
-      root.appendChild(row);
+    place();
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(place);
+    const layout = typeof MutationObserver === "function" ? new MutationObserver(place) : undefined;
+    layout?.observe(page, { attributes: true, attributeFilter: ["class"] });
+    window.addEventListener?.("resize", place);
+    this.cleanups.push(() => {
+      layout?.disconnect();
+      window.removeEventListener?.("resize", place);
     });
 
-    const footer = document.createElement("div");
-    footer.className = "lyric-layer-editor-footer";
-    const hint = document.createElement("span");
-    hint.className = "lyric-layer-hint";
-    hint.textContent = "支持粘贴多行 · Ctrl/Cmd + S 保存";
-    const save = button("保存翻译", "primary", ICONS.save);
-    footer.append(hint, save);
-    root.appendChild(footer);
-    inputs.forEach(resizeTextarea);
-    updateProgress();
-
-    let saving = false;
-    const saveEditor = async () => {
-      if (saving) return;
-      saving = true;
-      try {
-        const lines = editorLines.map((line, position) => {
-          const translatedText = inputs[position]?.value ?? "";
-          const { alignment, ...rest } = line;
-          // Phrase offsets are only valid for the exact source and translation.
-          // canonicalize already discarded alignment if the source changed.
-          return { ...rest, translatedText, ...(alignment && translatedText === line.translatedText ? { alignment } : {}) };
-        });
-        for (const [position, line] of lines.entries()) {
-          if (!visuallyEdited.has(position)) continue;
-          const source = lyrics.find(lyric => lyric.index === line.index);
-          if (!source || (!line.alignment && !line.motion)) continue;
-          const error = validateVisualTranslation(source, line);
-          if (error) throw new Error(`第 ${(line.index ?? 0) + 1} 行：${error}`);
-        }
-        await this.dependencies.store.save(entryFrom(track, lines, existing));
-        await this.dependencies.onEntryChanged(track.uri);
-        this.hideModal();
-        notify("翻译已保存并刷新");
-      } catch (error) {
-        saving = false;
-        notify(error instanceof Error ? error.message : "保存失败", true);
-      }
-    };
-    save.addEventListener("click", () => void saveEditor());
-    root.addEventListener("keydown", (event) => {
+    const onKey = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
-        void saveEditor();
+        void this.save();
+      }
+    };
+    // A press anywhere else ends typing into a line; the click itself then does
+    // what it natively does (seek to a line, play, ...).
+    const onPointer = (event: Event) => {
+      const target = event.target as Node | null;
+      if (this.editing === undefined || !target) return;
+      // The line being edited (its words too: clicking them seeks) and our own UI
+      // keep the editor open. Unfolded, the editor sits right after its line.
+      const host = this.editor?.root;
+      const line = this.panelPosition === undefined ? host?.parentElement : host?.previousElementSibling;
+      if (host?.contains(target) || line?.contains(target) || root.contains(target) || (target as Element).closest?.(".ll-dialog-backdrop")) return;
+      this.deactivate();
+    };
+    document.addEventListener("keydown", onKey, true);
+    document.addEventListener("pointerdown", onPointer, true);
+    this.cleanups.push(() => {
+      document.removeEventListener("keydown", onKey, true);
+      document.removeEventListener("pointerdown", onPointer, true);
+      page.classList.remove("ll-panel-host");
+    });
+  }
+
+  private showBanner(text: string, action?: { label: string; run: () => void }): void {
+    const banner = this.chrome?.banner;
+    if (!banner) return;
+    banner.replaceChildren(element("span", "ll-banner-text", text));
+    if (action) {
+      const undo = button(action.label, "small quiet");
+      undo.addEventListener("click", () => { banner.hidden = true; action.run(); });
+      banner.appendChild(undo);
+    }
+    const close = iconButton("关闭提示", ICONS.close, "small quiet");
+    close.addEventListener("click", () => { banner.hidden = true; });
+    banner.appendChild(close);
+    banner.hidden = false;
+  }
+
+  private inlineEditor(): InlineEditor {
+    if (this.editor) return this.editor;
+    const root = element("div", "lyric-layer-translation ll-scope ll-inline-editor");
+    // Marked like a translation so lyric text extraction and cleanup skip it.
+    root.dataset.lyricLayerTranslation = "true";
+    root.dataset.llEditor = "true";
+    const input = element("textarea", "ll-inline-input");
+    input.rows = 1;
+    input.spellcheck = false;
+    input.placeholder = "输入译文";
+    const tune = iconButton("对齐与动画", ICONS.tune, "small ll-inline-tune");
+    root.append(input, tune);
+    input.addEventListener("focus", pausePlayback);
+    input.addEventListener("input", () => {
+      if (this.editing === undefined) return;
+      this.session?.setValue(this.editing, input.value);
+      resizeTextarea(input);
+      this.changed();
+    });
+    input.addEventListener("keydown", (event) => {
+      // Enter confirms an IME candidate while composing; never steal that.
+      if (event.isComposing || event.keyCode === 229) return;
+      const plain = !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey;
+      const atEnd = input.selectionStart === input.value.length && input.selectionEnd === input.value.length;
+      const atStart = input.selectionStart === 0 && input.selectionEnd === 0;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        this.deactivate();
+      } else if (plain && event.key === "Enter") {
+        event.preventDefault();
+        this.move(1);
+      } else if (plain && event.key === "ArrowDown" && atEnd) {
+        event.preventDefault();
+        this.move(1);
+      } else if (plain && event.key === "ArrowUp" && atStart) {
+        event.preventDefault();
+        this.move(-1);
       }
     });
-    this.displayModal(`编辑翻译 · ${track.title}`, root, true);
+    input.addEventListener("paste", (event) => {
+      const text = event.clipboardData?.getData("text/plain") ?? "";
+      if (!/[\r\n]/.test(text) || this.editing === undefined || !this.session) return;
+      event.preventDefault();
+      let rows = text.replace(/\r\n?/g, "\n").split("\n");
+      if (rows[rows.length - 1] === "") rows = rows.slice(0, -1);
+      const { filled, overflow } = this.session.fillFrom(this.editing, rows);
+      input.value = this.session.values[this.editing] ?? "";
+      resizeTextarea(input);
+      this.changed();
+      this.showBanner(overflow > 0
+        ? `已填入 ${filled} 行，剩余 ${overflow} 行超出歌词末尾，未使用`
+        : `已从第 ${this.editing + 1} 行起依次填入 ${filled} 行`);
+    });
+    tune.addEventListener("click", () => {
+      if (this.editing !== undefined) this.openPanel(this.editing);
+    });
+    this.editor = { root, input, plain: [input, tune] };
+    return this.editor;
+  }
+
+  private activateFromPage(lyricIndex: number, line: Element): void {
+    const position = this.session?.positionOf(lyricIndex);
+    if (position === undefined) return;
+    // The click is a native one too: Spicy seeks to the clicked line.
+    clickNativeLine(line);
+    if (this.panelPosition !== undefined) this.openPanel(position);
+    else this.activate(position);
+  }
+
+  /** Start typing into one line, in place on the page. Only a click on the page
+   * seeks (natively): moving between lines by keyboard or the panel never moves
+   * playback, so a paused player is not repeatedly re-seeked. */
+  private activate(position: number): void {
+    const session = this.session;
+    if (!session || position < 0 || position >= session.size) return;
+    const editor = this.inlineEditor();
+    this.editing = position;
+    editor.root.dataset.lineIndex = String(session.lines[position]!.index);
+    this.syncEditor();
+    this.installHooks();
+    this.dependencies.renderNow();
+    pausePlayback();
+    this.focusEditor();
+  }
+
+  private deactivate(): void {
+    if (this.editing === undefined) return;
+    this.closePanel();
+    this.editing = undefined;
+    this.editor?.input.blur();
+    this.installHooks();
+  }
+
+  private move(delta: -1 | 1): void {
+    if (this.editing === undefined || !this.session) return;
+    const next = this.editing + delta;
+    if (next < 0 || next >= this.session.size) return;
+    this.activate(next);
+  }
+
+  private syncEditor(): void {
+    const editor = this.editor;
+    if (!editor || this.editing === undefined || !this.session) return;
+    editor.input.value = this.session.values[this.editing] ?? "";
+    resizeTextarea(editor.input);
+  }
+
+  /** reveal: scroll the editor into view; only for an explicit move to a line. */
+  private focusEditor(reveal = true): void {
+    const editor = this.editor;
+    if (!editor || this.editing === undefined || !editor.root.isConnected) return;
+    // The plain field, or the expanded editor's own text field.
+    const field = editor.root.querySelector?.("textarea") ?? editor.input;
+    if (!editor.root.contains(document.activeElement)) {
+      field.focus({ preventScroll: true });
+      const end = field.value.length;
+      field.setSelectionRange?.(end, end);
+    }
+    if (this.panelPosition === undefined) resizeTextarea(editor.input);
+    const box = reveal ? editor.root.getBoundingClientRect?.() : undefined;
+    if (box && (box.top < 96 || box.bottom > window.innerHeight - 24)) {
+      editor.root.scrollIntoView?.({ block: box.height > window.innerHeight * 0.5 ? "start" : "center", behavior: "smooth" });
+    }
+  }
+
+  /** Alignment and animation for one line, unfolded right under that line. */
+  private openPanel(position: number): void {
+    const session = this.session;
+    if (!session || position < 0 || position >= session.size) return;
+    this.panel?.close();
+    this.panelPosition = position;
+    this.panel ??= createLinePanel();
+    const element = this.panel.open({
+      line: session.lyricAt(position),
+      translation: session.lineDraft(position),
+      title: `第 ${position + 1} 行`,
+      canNavigate: { previous: position > 0, next: position < session.size - 1 },
+      onChange: (draft) => {
+        session.setLine(position, draft);
+        this.changed();
+      },
+      onClose: () => this.closePanel(),
+      onNavigate: (delta, draft) => {
+        session.setLine(position, draft);
+        this.changed();
+        this.openPanel(position + delta);
+      },
+    });
+    const editor = this.inlineEditor();
+    editor.root.classList.add("expanded");
+    editor.root.replaceChildren(element);
+    this.activate(position);
+  }
+
+  /** Fold the line editor back into the plain field of the same line. */
+  private closePanel(): void {
+    if (this.panelPosition === undefined) return;
+    this.panelPosition = undefined;
+    this.panel?.close();
+    const editor = this.editor;
+    if (!editor) return;
+    editor.root.classList.remove("expanded");
+    editor.root.replaceChildren(...editor.plain);
+    this.syncEditor();
+    this.installHooks();
+    this.dependencies.renderNow();
+    this.focusEditor();
+  }
+
+  private async save(): Promise<boolean> {
+    const session = this.session;
+    if (!session || this.saving || !session.dirty) return false;
+    this.saving = true;
+    this.changed();
+    try {
+      const entry = session.toEntry();
+      await this.dependencies.store.save(entry);
+      await this.dependencies.onEntryChanged(session.track.uri);
+      session.markSaved(entry);
+      this.drafts.delete(session.track.uri);
+      if (this.chrome) this.chrome.banner.hidden = true;
+      notify("翻译已保存");
+      return true;
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "保存失败", true);
+      return false;
+    } finally {
+      this.saving = false;
+      this.changed();
+    }
+  }
+
+  private async importFile(): Promise<void> {
+    const session = this.session;
+    if (!session) return;
+    try {
+      const file = await chooseFile(".txt,.lrc,.json,text/plain,application/json");
+      if (!file || this.session !== session) return;
+      const text = await file.text();
+      const before = session.snapshot();
+      const outcome = session.import(file, text);
+      if (outcome.kind === "other-track") {
+        const accepted = await confirmDialog({
+          title: "这是另一首歌的翻译",
+          message: `文件属于${outcome.name}，不是当前播放的《${session.track.title}》。要直接保存到${outcome.name}吗？当前歌曲的翻译不受影响。`,
+          confirm: `保存到${outcome.name}`,
+        });
+        if (!accepted) return;
+        await this.dependencies.store.save(outcome.entry);
+        await this.dependencies.onEntryChanged(outcome.entry.trackUri);
+        notify(`已保存到${outcome.name}`);
+        return;
+      }
+      this.syncEditor();
+      this.changed();
+      this.showBanner(`${outcome.message}。确认无误后保存。`, { label: "撤销导入", run: () => {
+        session.restore(before);
+        this.syncEditor();
+        this.changed();
+      } });
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "导入失败", true);
+    }
+  }
+
+  private async exportEntries(): Promise<MenuContent> {
+    const session = this.session;
+    if (!session) return [];
+    const [lyrics, entry] = await Promise.all([
+      this.dependencies.getExportLyrics(session.track.uri),
+      this.dependencies.store.get(session.track.uri),
+    ]);
+    const content: MenuContent = [];
+    if (session.dirty) content.push({ note: "有未保存的修改，译文导出的是上次保存的版本" });
+    exportChoices(session.track, lyrics, entry).forEach((choice, index) => {
+      if (index === 2 || index === 4) content.push("separator");
+      const file = choice.file;
+      content.push({ label: choice.label, detail: choice.detail, ariaLabel: choice.ariaLabel, disabled: !file,
+        action: () => {
+          if (!file) return;
+          downloadFile(file.text, file.filename, file.mimeType);
+          notify(file.message);
+        } });
+    });
+    return content;
+  }
+
+  private moreEntries(): MenuContent {
+    const session = this.session;
+    if (!session) return [];
+    return [
+      { label: "译文动态跟随", content: switchControl("译文动态跟随", "译文随原歌词逐字点亮、跳动",
+        isTranslationAnimationEnabled(), setTranslationAnimationEnabled) },
+      "separator",
+      { label: "删除这首歌的翻译…", danger: true, disabled: !session.saved, ariaLabel: "删除这首歌的翻译",
+        detail: session.saved ? "只删除保存在这台设备上的内容" : "还没有保存过翻译", action: async () => {
+          const accepted = await confirmDialog({
+            title: "删除这首歌的翻译？",
+            message: `《${session.track.title}》保存在这台设备上的译文、对齐和动画设置都会被删除，无法恢复。`,
+            confirm: "删除",
+            danger: true,
+          });
+          if (!accepted || this.session !== session) return;
+          await this.dependencies.store.delete(session.track.uri);
+          await this.dependencies.onEntryChanged(session.track.uri);
+          this.drafts.delete(session.track.uri);
+          this.closePanel();
+          this.session = new EditSession(session.track, session.lyrics, undefined);
+          this.syncEditor();
+          this.changed();
+          notify("已删除这首歌的翻译");
+        } },
+    ];
   }
 }
