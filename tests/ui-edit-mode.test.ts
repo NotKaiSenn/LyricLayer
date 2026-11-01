@@ -147,6 +147,7 @@ test("对齐与动画在那一句下方展开：改动实时生效，上一句/�
   run.labelled("对齐与动画").click();
   assert.equal(run.editingIndex(), 0, "it unfolds in place, under the same line");
   assert.ok(run.hooks()!.editing!.element.classList.contains("expanded"), "the plain field gives way to the line editor");
+  assert.equal(run.hooks()!.editing!.after, true, "unfolded under the line, which keeps its own text and preview");
   assert.equal(run.panelOpen(), true);
   assert.equal(run.panel().title, "第 1 行");
   assert.deepEqual({ ...run.panel().canNavigate }, { previous: false, next: true });
@@ -173,6 +174,7 @@ test("对齐与动画在那一句下方展开：改动实时生效，上一句/�
   assert.equal(run.panelOpen(), false);
   assert.equal(run.editingIndex(), 2, "folding returns to the plain field of the same line");
   assert.equal(run.hooks()!.editing!.element.classList.contains("expanded"), false);
+  assert.equal(run.hooks()!.editing!.after, false);
   assert.equal(run.active(), run.editorInput());
   run.documentKey("s", { ctrlKey: true });
   await settle();

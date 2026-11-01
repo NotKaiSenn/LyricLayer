@@ -12,7 +12,9 @@ const TRANSLATION_SELECTOR = "[data-lyric-layer-translation]";
  * an editor instead of its translation, and a click activates a line. */
 export interface EditHooks {
   placeholder: string;
-  editing?: { index: number; element: HTMLElement };
+  /** inside: replaces the line's translation (a plain field). after: sits right
+   * below the line, which keeps rendering its own text and draft translation. */
+  editing?: { index: number; element: HTMLElement; after?: boolean };
   onActivate(index: number, line: Element): void;
   /** The editor was (re)attached, e.g. after Spicy re-created the line. */
   onEditorMounted?(): void;
@@ -171,7 +173,13 @@ export class TranslationRenderer {
       root.querySelectorAll(LINE_SELECTOR).forEach((line) => {
         const index = this.resolveLineIndex(line);
         let existing = line.querySelector(`:scope > ${TRANSLATION_SELECTOR}`) as HTMLElement | null;
-        if (editing && index === editing.index) {
+        if (editing?.after && index === editing.index && line.nextElementSibling !== editing.element) {
+          // Outside the line: growing the line box would stretch the gradient
+          // that paints its text, and the line must keep previewing the draft.
+          line.after(editing.element);
+          this.editHooks?.onEditorMounted?.();
+        }
+        if (editing && !editing.after && index === editing.index) {
           if (existing && existing !== editing.element) {
             this.animator.remove(existing);
             existing.remove();

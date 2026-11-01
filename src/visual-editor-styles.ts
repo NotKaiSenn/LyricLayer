@@ -113,10 +113,10 @@ export const VISUAL_EDITOR_STYLES = `
 
 /* Alignment and animation unfold in place, under the line being edited: the
    page around it is the preview, and the eye never leaves the line. */
-/* The row always takes a full line of its own (lines are wrapping flex rows);
-   the card inside keeps a comfortable measure. */
-#SpicyLyricsPage .line > .lyric-layer-translation.ll-inline-editor.expanded {
-  width: 100%; flex: 0 0 100%; margin-top: .5em;
+/* Placed right after its line, not inside it; the card keeps a comfortable measure. */
+#SpicyLyricsPage .lyric-layer-translation.ll-inline-editor.expanded {
+  display: block; width: auto; margin: .6em 0 .4em; padding: 0; color: #fff; -webkit-text-fill-color: #fff;
+  background: none; text-shadow: none; filter: none;
   font: 400 14px/1.5 var(--encore-body-font-stack, var(--fallback-fonts, sans-serif)); letter-spacing: normal;
   text-align: left; white-space: normal; overflow-wrap: normal; cursor: auto;
 }

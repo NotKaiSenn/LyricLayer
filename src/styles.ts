@@ -240,7 +240,7 @@ export const STYLES = `
   color: rgba(255,255,255,.32) !important; -webkit-text-fill-color: rgba(255,255,255,.32) !important;
   background: none !important; text-shadow: none !important; font-weight: 500;
 }
-#SpicyLyricsPage .line:has(> .ll-inline-editor) { outline: 1.5px dashed rgba(255,199,128,.6); outline-offset: 8px; border-radius: 12px; }
+#SpicyLyricsPage .line:has(> .ll-inline-editor), #SpicyLyricsPage .line:has(+ .ll-inline-editor) { outline: 1.5px dashed rgba(255,199,128,.6); outline-offset: 8px; border-radius: 12px; }
 #SpicyLyricsPage .line > .lyric-layer-translation.ll-inline-editor {
   position: relative; display: block; margin-top: .3em; color: #fff !important; -webkit-text-fill-color: #fff !important;
   background: none !important; text-shadow: none !important; filter: none !important; cursor: auto;

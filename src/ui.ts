@@ -191,7 +191,8 @@ export class TranslationUi {
     const index = this.editing === undefined ? undefined : session.lines[this.editing]?.index;
     this.dependencies.setEditHooks({
       placeholder: PLACEHOLDER,
-      editing: editor && index !== undefined ? { index, element: editor.root } : undefined,
+      editing: editor && index !== undefined
+        ? { index, element: editor.root, after: this.panelPosition !== undefined } : undefined,
       onActivate: (lyricIndex, line) => this.activateFromPage(lyricIndex, line),
       onEditorMounted: () => this.focusEditor(),
     });
@@ -280,9 +281,10 @@ export class TranslationUi {
       const target = event.target as Node | null;
       if (this.editing === undefined || !target) return;
       // The line being edited (its words too: clicking them seeks) and our own UI
-      // keep the editor open.
-      const line = this.editor?.root.parentElement;
-      if (line?.contains(target) || root.contains(target) || (target as Element).closest?.(".ll-dialog-backdrop")) return;
+      // keep the editor open. Unfolded, the editor sits right after its line.
+      const host = this.editor?.root;
+      const line = this.panelPosition === undefined ? host?.parentElement : host?.previousElementSibling;
+      if (host?.contains(target) || line?.contains(target) || root.contains(target) || (target as Element).closest?.(".ll-dialog-backdrop")) return;
       this.deactivate();
     };
     document.addEventListener("keydown", onKey, true);
@@ -473,6 +475,8 @@ export class TranslationUi {
     editor.root.classList.remove("expanded");
     editor.root.replaceChildren(...editor.plain);
     this.syncEditor();
+    this.installHooks();
+    this.dependencies.renderNow();
     this.focusEditor();
   }
 

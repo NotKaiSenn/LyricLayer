@@ -260,6 +260,14 @@ export function createUiHarness(options: HarnessOptions = {}) {
       return;
     }
     const line = lineFor(editing.index);
+    if (editing.after) {
+      // Unfolded editors sit after their line; any non-line parent stands in for that.
+      if (editing.element.parent === line || !editing.element.parent) {
+        page.appendChild(editing.element);
+        hooks?.onEditorMounted?.();
+      }
+      return;
+    }
     if (editing.element.parent !== line) {
       line.appendChild(editing.element);
       hooks?.onEditorMounted?.();
