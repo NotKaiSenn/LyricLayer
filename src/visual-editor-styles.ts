@@ -111,27 +111,26 @@ export const VISUAL_EDITOR_STYLES = `
 .lyric-layer-visual-editor .ll-ve-range:focus-visible { outline: 2px solid var(--ll-text); outline-offset: 3px; }
 .lyric-layer-visual-editor .ll-ve-slider-value { color: var(--ll-text-2); font-size: 13px; font-variant-numeric: tabular-nums; text-align: right; }
 
-/* The line editor lives in a panel docked under the real lyrics, which act
-   as the preview. It only exists while a line is being edited. */
-.ll-line-panel {
-  /* A card floating over the bottom of the page, not a full-width bar: a
-     comfortable measure keeps the eye from travelling across the whole window. */
-  position: absolute; left: 50%; bottom: 20px; z-index: 102; box-sizing: border-box;
-  width: min(820px, calc(100% - 40px)); max-height: min(62%, 600px); overflow-y: auto;
-  padding: 22px 26px 24px; border-radius: 20px; transform: translateX(-50%);
-  background: rgba(22,22,24,.95); box-shadow: 0 24px 60px rgba(0,0,0,.5), inset 0 0 0 1px rgba(255,255,255,.1);
-  -webkit-backdrop-filter: blur(24px) saturate(1.2); backdrop-filter: blur(24px) saturate(1.2);
-  animation: ll-panel-in .22s cubic-bezier(.2,.8,.2,1);
+/* Alignment and animation unfold in place, under the line being edited: the
+   page around it is the preview, and the eye never leaves the line. */
+/* The row always takes a full line of its own (lines are wrapping flex rows);
+   the card inside keeps a comfortable measure. */
+#SpicyLyricsPage .line > .lyric-layer-translation.ll-inline-editor.expanded {
+  width: 100%; flex: 0 0 100%; margin-top: .5em;
+  font: 400 14px/1.5 var(--encore-body-font-stack, var(--fallback-fonts, sans-serif)); letter-spacing: normal;
+  text-align: left; white-space: normal; overflow-wrap: normal; cursor: auto;
 }
-/* Without a lyrics page (e.g. opened from a side card) it floats above the player bar. */
-.ll-line-panel.floating { position: fixed; bottom: 96px; max-height: min(60vh, 520px); }
-@keyframes ll-panel-in { from { opacity: 0; translate: 0 16px; } }
-#SpicyLyricsPage.ll-panel-host { position: relative; }
-#SpicyLyricsPage.ll-panel-open .LyricsContainer {
-  align-self: flex-start; height: calc(100% - var(--ll-panel-height, 0px)) !important; transition: height .22s cubic-bezier(.2,.8,.2,1);
+#SpicyLyricsPage .ll-inline-editor.expanded > .lyric-layer-visual-editor {
+  max-width: 780px; padding: 18px 22px 20px; border-radius: 18px;
+  background: rgba(22,22,24,.94); box-shadow: 0 16px 40px rgba(0,0,0,.4), inset 0 0 0 1px rgba(255,255,255,.1);
+  -webkit-backdrop-filter: blur(20px) saturate(1.2); backdrop-filter: blur(20px) saturate(1.2);
+  animation: ll-unfold .2s cubic-bezier(.2,.8,.2,1);
 }
-#SpicyLyricsPage .ll-editing-line { outline: 1.5px dashed rgba(255,199,128,.65); outline-offset: 10px; border-radius: 12px; }
-@media (prefers-reduced-motion: reduce) { .ll-line-panel { animation: none; } }
+/* The line paints its text through inherited fills and glows; controls paint their own. */
+#SpicyLyricsPage .ll-inline-editor.expanded * { -webkit-text-fill-color: currentColor; text-shadow: none; }
+#SpicyLyricsPage .ll-inline-editor.expanded .ll-ve-heading-line { display: none; }
+@keyframes ll-unfold { from { opacity: 0; translate: 0 -6px; } }
+@media (prefers-reduced-motion: reduce) { #SpicyLyricsPage .ll-inline-editor.expanded > .lyric-layer-visual-editor { animation: none; } }
 
 .lyric-layer-visual-editor .ll-ve-header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
 .lyric-layer-visual-editor .ll-ve-heading { display: flex; flex: 1; align-items: baseline; gap: 12px; min-width: 0; }

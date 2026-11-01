@@ -34,6 +34,8 @@ interface Chrome {
 interface InlineEditor {
   root: HTMLElement;
   input: HTMLTextAreaElement;
+  /** The plain field: the textarea and its "对齐与动画" button. */
+  plain: HTMLElement[];
 }
 
 function player() {
@@ -277,8 +279,10 @@ export class TranslationUi {
     const onPointer = (event: Event) => {
       const target = event.target as Node | null;
       if (this.editing === undefined || !target) return;
-      if (this.editor?.root.contains(target) || root.contains(target)
-        || (target as Element).closest?.(".ll-line-panel, .ll-dialog-backdrop")) return;
+      // The line being edited (its words too: clicking them seeks) and our own UI
+      // keep the editor open.
+      const line = this.editor?.root.parentElement;
+      if (line?.contains(target) || root.contains(target) || (target as Element).closest?.(".ll-dialog-backdrop")) return;
       this.deactivate();
     };
     document.addEventListener("keydown", onKey, true);
@@ -362,7 +366,7 @@ export class TranslationUi {
     tune.addEventListener("click", () => {
       if (this.editing !== undefined) this.openPanel(this.editing);
     });
-    this.editor = { root, input };
+    this.editor = { root, input, plain: [input, tune] };
     return this.editor;
   }
 
@@ -393,6 +397,7 @@ export class TranslationUi {
 
   private deactivate(): void {
     if (this.editing === undefined) return;
+    this.closePanel();
     this.editing = undefined;
     this.editor?.input.blur();
     this.installHooks();
@@ -415,26 +420,28 @@ export class TranslationUi {
   private focusEditor(): void {
     const editor = this.editor;
     if (!editor || this.editing === undefined || !editor.root.isConnected) return;
-    if (document.activeElement !== editor.input) {
-      editor.input.focus({ preventScroll: true });
-      const end = editor.input.value.length;
-      editor.input.setSelectionRange?.(end, end);
+    // The plain field, or the expanded editor's own text field.
+    const field = editor.root.querySelector?.("textarea") ?? editor.input;
+    if (!editor.root.contains(document.activeElement)) {
+      field.focus({ preventScroll: true });
+      const end = field.value.length;
+      field.setSelectionRange?.(end, end);
     }
-    resizeTextarea(editor.input);
+    if (this.panelPosition === undefined) resizeTextarea(editor.input);
     const box = editor.root.getBoundingClientRect?.();
-    if (box && (box.top < 96 || box.bottom > window.innerHeight * 0.55)) {
-      editor.root.scrollIntoView?.({ block: "center", behavior: "smooth" });
+    if (box && (box.top < 96 || box.bottom > window.innerHeight - 24)) {
+      editor.root.scrollIntoView?.({ block: box.height > window.innerHeight * 0.5 ? "start" : "center", behavior: "smooth" });
     }
   }
 
-  /** Alignment and animation for one line, in the panel under the page. */
+  /** Alignment and animation for one line, unfolded right under that line. */
   private openPanel(position: number): void {
     const session = this.session;
     if (!session || position < 0 || position >= session.size) return;
-    if (this.editing !== undefined) this.deactivate();
+    this.panel?.close();
     this.panelPosition = position;
     this.panel ??= createLinePanel();
-    this.panel.open({
+    const element = this.panel.open({
       line: session.lyricAt(position),
       translation: session.lineDraft(position),
       title: `第 ${position + 1} 行`,
@@ -450,12 +457,23 @@ export class TranslationUi {
         this.openPanel(position + delta);
       },
     });
+    const editor = this.inlineEditor();
+    editor.root.classList.add("expanded");
+    editor.root.replaceChildren(element);
+    this.activate(position);
   }
 
+  /** Fold the line editor back into the plain field of the same line. */
   private closePanel(): void {
     if (this.panelPosition === undefined) return;
     this.panelPosition = undefined;
     this.panel?.close();
+    const editor = this.editor;
+    if (!editor) return;
+    editor.root.classList.remove("expanded");
+    editor.root.replaceChildren(...editor.plain);
+    this.syncEditor();
+    this.focusEditor();
   }
 
   private async save(): Promise<boolean> {

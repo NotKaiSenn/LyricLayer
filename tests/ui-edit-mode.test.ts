@@ -140,12 +140,13 @@ test("切歌时退出编辑并暂存修改，回到这首歌可恢复或放弃",
   assert.deepEqual(texts(lastPreview(run)), ["一", "二", ""]);
 });
 
-test("对齐与动画面板：改动实时生效，上一句/下一句连续切换不会卡住", async () => {
+test("对齐与动画在那一句下方展开：改动实时生效，上一句/下一句连续切换不会卡住", async () => {
   const run = createUiHarness({ entry, lyrics });
   await run.enter();
   run.clickLine(0);
   run.labelled("对齐与动画").click();
-  assert.equal(run.editingIndex(), undefined, "the panel takes over typing for the line");
+  assert.equal(run.editingIndex(), 0, "it unfolds in place, under the same line");
+  assert.ok(run.hooks()!.editing!.element.classList.contains("expanded"), "the plain field gives way to the line editor");
   assert.equal(run.panelOpen(), true);
   assert.equal(run.panel().title, "第 1 行");
   assert.deepEqual({ ...run.panel().canNavigate }, { previous: false, next: true });
@@ -163,11 +164,16 @@ test("对齐与动画面板：改动实时生效，上一句/下一句连续切�
   assert.equal(run.panel().translation.translatedText, "新的一");
   run.panel().onNavigate!(1, run.panel().translation);
   assert.equal(run.panel().title, "第 2 行");
+  assert.equal(run.editingIndex(), 1, "the unfolded editor moves to the next line");
   assert.deepEqual(run.player.seeks, [], "panel navigation does not seek");
   run.clickLine(2);
-  assert.equal(run.panel().title, "第 3 行", "clicking another line moves the open panel there");
+  assert.equal(run.panel().title, "第 3 行", "clicking another line moves the open editor there");
+  assert.equal(run.editingIndex(), 2);
   run.panel().onClose();
   assert.equal(run.panelOpen(), false);
+  assert.equal(run.editingIndex(), 2, "folding returns to the plain field of the same line");
+  assert.equal(run.hooks()!.editing!.element.classList.contains("expanded"), false);
+  assert.equal(run.active(), run.editorInput());
   run.documentKey("s", { ctrlKey: true });
   await settle();
   assert.equal(run.saved[0]!.lines[0]!.motion?.amplitude, 0);

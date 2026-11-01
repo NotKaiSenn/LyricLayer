@@ -13,7 +13,7 @@ const bundle = await build({
   plugins: [{ name: "line-panel-boundary", setup(builder) {
     builder.onResolve({ filter: /^\.\/line-panel$/ }, () => ({ path: "panel", namespace: "fixture" }));
     builder.onLoad({ filter: /.*/, namespace: "fixture" }, () => ({
-      contents: "export const createLinePanel = () => ({ open: options => globalThis.__openLinePanel(options), close: () => globalThis.__closeLinePanel() });",
+      contents: "export const createLinePanel = () => ({ open: options => { globalThis.__openLinePanel(options); return document.createElement('div'); }, close: () => globalThis.__closeLinePanel() });",
     }));
   } }],
 });
