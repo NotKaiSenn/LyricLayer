@@ -194,7 +194,8 @@ export class TranslationUi {
       editing: editor && index !== undefined
         ? { index, element: editor.root, after: this.panelPosition !== undefined } : undefined,
       onActivate: (lyricIndex, line) => this.activateFromPage(lyricIndex, line),
-      onEditorMounted: () => this.focusEditor(),
+      // Spicy re-created the row: give focus back, but never move the page for it.
+      onEditorMounted: () => this.focusEditor(false),
     });
   }
 
@@ -419,7 +420,8 @@ export class TranslationUi {
     resizeTextarea(editor.input);
   }
 
-  private focusEditor(): void {
+  /** reveal: scroll the editor into view; only for an explicit move to a line. */
+  private focusEditor(reveal = true): void {
     const editor = this.editor;
     if (!editor || this.editing === undefined || !editor.root.isConnected) return;
     // The plain field, or the expanded editor's own text field.
@@ -430,7 +432,7 @@ export class TranslationUi {
       field.setSelectionRange?.(end, end);
     }
     if (this.panelPosition === undefined) resizeTextarea(editor.input);
-    const box = editor.root.getBoundingClientRect?.();
+    const box = reveal ? editor.root.getBoundingClientRect?.() : undefined;
     if (box && (box.top < 96 || box.bottom > window.innerHeight - 24)) {
       editor.root.scrollIntoView?.({ block: box.height > window.innerHeight * 0.5 ? "start" : "center", behavior: "smooth" });
     }

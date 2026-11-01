@@ -1,3 +1,4 @@
+import { lyricsPage } from "./dom-renderer";
 import { playbackPosition } from "./playback-clock";
 import { createVisualEditor, type VisualEditor, type VisualEditorOptions } from "./visual-editor";
 import type { LyricLine } from "./types";
@@ -17,6 +18,17 @@ const PRE_ROLL_MS = 1500;
 const POST_ROLL_MS = 600;
 // Let the seek settle before resuming, so playback never starts from the old spot.
 const SEEK_SETTLE_MS = 150;
+// Spicy holds off following the active line for 750 ms after the user scrolls.
+const HOLD_SCROLL_EVERY_MS = 400;
+
+/** Tell Spicy the user is looking at the list, so it does not scroll to follow
+ * the active line (e.g. while auditioning) out from under the open editor. */
+function holdAutoScroll(): void {
+  const list = lyricsPage()?.querySelector(".SpicyLyricsScrollContainer");
+  try {
+    list?.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: 0 }));
+  } catch { /* Without it Spicy simply keeps following playback. */ }
+}
 
 function lineBounds(line: LyricLine): { start: number; end: number } | undefined {
   const start = line.startTime ?? line.syllables?.[0]?.startTime;
@@ -31,6 +43,7 @@ export function createLinePanel(): LinePanel {
   let frame: number | undefined;
   let audition: { end: number; startedAt: number; length: number } | undefined;
   let resume: number | undefined;
+  let lastHold = 0;
   const player = () => window.Spicetify?.Player;
 
   const stopAudition = () => {
@@ -44,6 +57,10 @@ export function createLinePanel(): LinePanel {
 
   const tick = (now: number) => {
     frame = requestAnimationFrame(tick);
+    if (now - lastHold > HOLD_SCROLL_EVERY_MS) {
+      lastHold = now;
+      holdAutoScroll();
+    }
     const position = playbackPosition();
     editor?.setPlayhead(position);
     if (audition) {
