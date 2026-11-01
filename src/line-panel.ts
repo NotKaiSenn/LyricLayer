@@ -136,7 +136,8 @@ export function createLinePanel(): LinePanel {
           // to the space above the panel keeps the line being edited in view.
           host = page;
           page.classList.add("ll-panel-open");
-          const measure = () => page.style.setProperty("--ll-panel-height", `${container.offsetHeight}px`);
+          // The card floats 20px above the bottom; leave a little air above it too.
+          const measure = () => page.style.setProperty("--ll-panel-height", `${container.offsetHeight + 36}px`);
           measure();
           if (typeof ResizeObserver !== "undefined") {
             resize = new ResizeObserver(measure);

@@ -77,7 +77,7 @@ export const VISUAL_EDITOR_STYLES = `
 .lyric-layer-visual-editor .ll-ve-details[hidden] { display: none; }
 .lyric-layer-visual-editor .ll-ve-precise { display: grid; gap: 6px; margin-top: 10px; }
 .lyric-layer-visual-editor .ll-ve-precise-row {
-  display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) 110px 110px 92px; gap: 10px; align-items: center;
+  display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) 100px 100px 88px; gap: 10px; align-items: center;
 }
 .lyric-layer-visual-editor .ll-ve-precise-row.head { color: var(--ll-text-3); font-size: 12px; }
 .lyric-layer-visual-editor .ll-ve-precise-text { overflow: hidden; color: var(--ll-text); text-overflow: ellipsis; white-space: pre; }
@@ -114,19 +114,17 @@ export const VISUAL_EDITOR_STYLES = `
 /* The line editor lives in a panel docked under the real lyrics, which act
    as the preview. It only exists while a line is being edited. */
 .ll-line-panel {
-  position: absolute; left: 0; right: 0; bottom: 0; z-index: 102; box-sizing: border-box;
-  max-height: min(60%, 600px); overflow-y: auto;
-  /* Generous gutters, and a readable measure on very wide windows. */
-  padding: 24px max(40px, calc((100% - 1200px) / 2)) 28px;
-  border-top: 1px solid rgba(255,255,255,.1); background: rgba(20,20,22,.94);
+  /* A card floating over the bottom of the page, not a full-width bar: a
+     comfortable measure keeps the eye from travelling across the whole window. */
+  position: absolute; left: 50%; bottom: 20px; z-index: 102; box-sizing: border-box;
+  width: min(820px, calc(100% - 40px)); max-height: min(62%, 600px); overflow-y: auto;
+  padding: 22px 26px 24px; border-radius: 20px; transform: translateX(-50%);
+  background: rgba(22,22,24,.95); box-shadow: 0 24px 60px rgba(0,0,0,.5), inset 0 0 0 1px rgba(255,255,255,.1);
   -webkit-backdrop-filter: blur(24px) saturate(1.2); backdrop-filter: blur(24px) saturate(1.2);
-  box-shadow: 0 -24px 60px rgba(0,0,0,.4); border-radius: 18px 18px 0 0; animation: ll-panel-in .22s cubic-bezier(.2,.8,.2,1);
+  animation: ll-panel-in .22s cubic-bezier(.2,.8,.2,1);
 }
 /* Without a lyrics page (e.g. opened from a side card) it floats above the player bar. */
-.ll-line-panel.floating {
-  position: fixed; left: 0; right: 0; bottom: 96px; width: min(960px, calc(100vw - 48px)); margin: 0 auto;
-  border: 1px solid rgba(255,255,255,.1); border-radius: 14px; max-height: min(60vh, 440px);
-}
+.ll-line-panel.floating { position: fixed; bottom: 96px; max-height: min(60vh, 520px); }
 @keyframes ll-panel-in { from { opacity: 0; translate: 0 16px; } }
 #SpicyLyricsPage.ll-panel-host { position: relative; }
 #SpicyLyricsPage.ll-panel-open .LyricsContainer {
